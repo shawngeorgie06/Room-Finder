@@ -563,8 +563,8 @@ function handleDrop(e) {
 
 function handleFileSelect(file) {
   if (!file) return;
-  if (!file.name.toLowerCase().endsWith('.csv')) {
-    showUploadStatus('error', 'Only CSV files are accepted.');
+  if (!file.name.toLowerCase().endsWith('.csv') && !file.name.toLowerCase().endsWith('.xlsx')) {
+    showUploadStatus('error', 'Only CSV or Excel (.xlsx) files are accepted.');
     return;
   }
   selectedFile = file;
