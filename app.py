@@ -29,10 +29,14 @@ def create_app(schedule=None):
 
     if schedule is None:
         csv_path = os.path.join(UPLOAD_FOLDER, "Course_Schedule_202610.csv")
-        schedule = load_schedule(csv_path)
-        meta['filename'] = os.path.basename(csv_path)
-        meta['loaded_at'] = datetime.now().isoformat(timespec='seconds')
-        print(f"Loaded {len(schedule)} schedule entries.")
+        if os.path.exists(csv_path):
+            schedule = load_schedule(csv_path)
+            meta['filename'] = os.path.basename(csv_path)
+            meta['loaded_at'] = datetime.now().isoformat(timespec='seconds')
+            print(f"Loaded {len(schedule)} schedule entries.")
+        else:
+            schedule = []
+            print("No schedule CSV found — upload one via the Settings page.")
 
     @app.route("/")
     def index():
@@ -234,6 +238,8 @@ def create_app(schedule=None):
     return app
 
 
+# Module-level app instance for gunicorn (production)
+application = create_app()
+
 if __name__ == "__main__":
-    application = create_app()
     application.run(host='0.0.0.0', debug=False, port=5000)
