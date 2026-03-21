@@ -28,12 +28,15 @@ def create_app(schedule=None):
     meta = {'filename': '', 'loaded_at': None}
 
     if schedule is None:
-        csv_path = os.path.join(UPLOAD_FOLDER, "Course_Schedule_202610.csv")
-        if os.path.exists(csv_path):
-            schedule = load_schedule(csv_path)
-            meta['filename'] = os.path.basename(csv_path)
-            meta['loaded_at'] = datetime.now().isoformat(timespec='seconds')
-            print(f"Loaded {len(schedule)} schedule entries.")
+        # Try default bundled schedule first, then fall back to local dev file
+        for candidate in ['schedule_default.csv', 'Course_Schedule_202610.csv']:
+            csv_path = os.path.join(UPLOAD_FOLDER, candidate)
+            if os.path.exists(csv_path):
+                schedule = load_schedule(csv_path)
+                meta['filename'] = candidate
+                meta['loaded_at'] = datetime.now().isoformat(timespec='seconds')
+                print(f"Loaded {len(schedule)} entries from '{candidate}'.")
+                break
         else:
             schedule = []
             print("No schedule CSV found — upload one via the Settings page.")

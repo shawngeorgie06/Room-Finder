@@ -9,6 +9,8 @@ start.sh
 # Schedule data — not committed, regenerate via bookmarklet each semester
 *.csv
 *.xlsx
+# Exception: default schedule ships with the app so Render always has data
+!schedule_default.csv
 
 # Logs — may contain local paths / stack traces
 *.log
