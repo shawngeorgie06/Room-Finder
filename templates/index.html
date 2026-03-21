@@ -462,6 +462,15 @@
           <!-- Status message -->
           <div id="upload-status" class="hidden px-4 py-3 rounded-sm text-xs font-label font-bold tracking-wide"></div>
 
+          <!-- Admin password (only needed when deployed with UPLOAD_PASSWORD set) -->
+          <div>
+            <label class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest block mb-2">
+              Admin Password <span class="text-on-surface-variant/40 normal-case tracking-normal">(required on live server)</span>
+            </label>
+            <input id="upload-password" type="password" placeholder="Leave blank if running locally"
+                   class="w-full bg-[#0e0e0e] border border-outline-variant/30 text-white text-xs font-label px-3 py-2.5 rounded-sm focus:border-primary/50 focus:outline-none placeholder:text-on-surface-variant/30"/>
+          </div>
+
           <!-- Upload button -->
           <button id="upload-btn" onclick="uploadSchedule()" disabled
                   class="w-full py-3 bg-primary/10 border border-primary/20 text-primary/40 font-headline font-bold text-sm uppercase tracking-widest rounded-sm transition-all cursor-not-allowed">

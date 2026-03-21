@@ -188,6 +188,13 @@ def create_app(schedule=None):
 
     @app.route("/api/upload-schedule", methods=["POST"])
     def upload_schedule():
+        # Password check — only enforced when UPLOAD_PASSWORD env var is set
+        required_pw = os.environ.get('UPLOAD_PASSWORD', '').strip()
+        if required_pw:
+            supplied_pw = request.form.get('password', '').strip()
+            if not supplied_pw or supplied_pw != required_pw:
+                return jsonify({'error': 'Invalid password.'}), 401
+
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided.'}), 400
         f = request.files['file']
@@ -229,4 +236,4 @@ def create_app(schedule=None):
 
 if __name__ == "__main__":
     application = create_app()
-    application.run(host='0.0.0.0', debug=True, port=5000)
+    application.run(host='0.0.0.0', debug=False, port=5000)

@@ -609,6 +609,8 @@ async function uploadSchedule() {
 
   const form = new FormData();
   form.append('file', selectedFile);
+  const pw = ($('upload-password') || {}).value || '';
+  if (pw) form.append('password', pw);
 
   try {
     const r = await fetch('/api/upload-schedule', { method: 'POST', body: form });
