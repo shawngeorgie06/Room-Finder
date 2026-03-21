@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NJIT Schedule Extractor — Bookmarklet</title>
+  <style>
+    :root {
+      --bg: #07090d;
+      --surface: #0f141c;
+      --border: rgba(255,255,255,0.07);
+      --red: #cc0000;
+      --green: #22c55e;
+      --text: #dde4ee;
+      --text-muted: #44546a;
+      --text-mid: #7a8fa8;
+      --mono: 'JetBrains Mono', monospace;
+      --ui: 'Rajdhani', sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--ui);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+    }
+    .card {
+      max-width: 640px;
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .card-header {
+      padding: 28px 32px 20px;
+      border-bottom: 1px solid var(--border);
+    }
+    .eyebrow {
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--red);
+      margin-bottom: 10px;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: var(--text);
+    }
+    .card-body {
+      padding: 28px 32px;
+    }
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      margin-bottom: 32px;
+    }
+    .step {
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+    }
+    .step-num {
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: rgba(204,0,0,0.15);
+      border: 1px solid rgba(204,0,0,0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--red);
+    }
+    .step-text {
+      font-size: 0.95rem;
+      line-height: 1.6;
+      color: var(--text-mid);
+      padding-top: 3px;
+    }
+    .step-text strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+    .bookmarklet-wrap {
+      background: rgba(204,0,0,0.08);
+      border: 1px dashed rgba(204,0,0,0.4);
+      border-radius: 6px;
+      padding: 20px 24px;
+      text-align: center;
+    }
+    .bookmarklet-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+    }
+    .bookmarklet-link {
+      display: inline-block;
+      padding: 12px 28px;
+      background: var(--red);
+      color: #fff;
+      font-family: var(--ui);
+      font-weight: 700;
+      font-size: 0.9rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      text-decoration: none;
+      border-radius: 4px;
+      cursor: grab;
+      box-shadow: 0 0 24px rgba(204,0,0,0.3);
+      transition: box-shadow 0.2s, transform 0.2s;
+    }
+    .bookmarklet-link:hover {
+      box-shadow: 0 0 36px rgba(204,0,0,0.5);
+      transform: translateY(-1px);
+    }
+    .hint {
+      margin-top: 12px;
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      letter-spacing: 0.06em;
+    }
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 28px 0;
+    }
+    .note {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      line-height: 1.7;
+    }
+    .note code {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      background: rgba(255,255,255,0.06);
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: var(--text-mid);
+    }
+    a { color: var(--red); }
+
+    @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=JetBrains+Mono:wght@500;700&display=swap');
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="card-header">
+      <div class="eyebrow">NJIT Rooms · Data Tool</div>
+      <h1>Schedule Extractor</h1>
+    </div>
+    <div class="card-body">
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-text">
+            <strong>Drag the button below</strong> to your browser's bookmarks bar.
+            (If the bar isn't visible: <strong>Ctrl+Shift+B</strong>)
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-text">
+            Go to <a href="https://generalssb-prod.ec.njit.edu/BannerExtensibility/customPage/page/stuRegCrseSched" target="_blank" rel="noopener">Banner Course Schedule</a> and <strong>log in</strong> with your NJIT credentials + Duo.
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-text">
+            <strong>Select the term</strong> (e.g., Spring 2026) and wait for the subject list to load.
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <div class="step-text">
+            Click the <strong>bookmarklet</strong> in your bookmarks bar. A progress overlay will appear while it fetches all subjects (~60–90 seconds). A CSV file will download automatically.
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">5</div>
+          <div class="step-text">
+            Place the downloaded <code>.csv</code> file in the <code>njit-empty-rooms</code> folder and point <code>app.py</code> at it (or rename it to replace <code>Course_Schedule_All_Subjects.xlsx</code> — just update the extension in the load call).
+          </div>
+        </div>
+      </div>
+
+      <div class="bookmarklet-wrap">
+        <div class="bookmarklet-label">Drag this to your bookmarks bar</div>
+        <a class="bookmarklet-link" id="bm-link" href="#">⬇ Extract NJIT Schedule</a>
+        <div class="hint">or click it while on the Banner page</div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="note">
+        <strong style="color:var(--text)">What it does:</strong> The bookmarklet reads the full subject list from the already-loaded page,
+        then loops through every subject — calling the same Excel export endpoint Banner uses —
+        and combines all sections into one CSV. It runs entirely in your browser using your
+        existing authenticated session. No credentials are stored or transmitted anywhere else.
+        <br><br>
+        <strong style="color:var(--text)">Output columns:</strong>
+        <code>Term, Course, Title, Section, CRN, Days, Times, Location, Status, Max, Now, Instructor, Delivery Mode, Credits, Info, Comments</code>
+        <br><br>
+        <strong style="color:var(--text)">Note:</strong> The app filters to <code>Face-to-Face</code> and <code>Hybrid</code> delivery modes only, so online-only sections are automatically excluded.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Build the bookmarklet href from the minified source
+    // Does NOT use Angular $scope — works even when debug mode is disabled.
+    // Reads the term from the DOM select, fetches subjects + sections via API.
+    const src = `(async function(){
+/* ── 1. Term ── */
+const termSel=document.querySelector("#pbid-selectBlockTermSelect");
+if(!termSel||!termSel.value){alert("Select a term first and wait for the page to load.");return;}
+const term=termSel.value.replace(/^string:/,"");
+if(!/^\\d{6}$/.test(term)){alert("Term '"+term+"' is not a valid 6-digit code. Select a term first.");return;}
+console.log("Term:",term);
+
+/* ── 2. Subjects from DOM table cells ── */
+const SKIP=new Set(["ALL","YES","NO","TBA","NA","AM","PM","TR","MWF","MW","TTH","SEM","LAB","LEC","REC","NEW","ADD"]);
+const seen=new Set();
+document.querySelectorAll("td").forEach(td=>{
+  const t=td.textContent.trim();
+  if(/^[A-Z]{2,7}$/.test(t)&&!SKIP.has(t))seen.add(t);
+});
+const subjects=[...seen].sort();
+if(!subjects.length){alert("No subjects found. Select a term and wait for the subject list to load.");return;}
+console.log("Subjects ("+subjects.length+"):",subjects);
+
+/* ── 3. XHR interceptor — piggybacks on Banner's own authenticated requests ── */
+const captured={};
+let currentSubj=null;
+let resolveCapture=null;
+const origOpen=XMLHttpRequest.prototype.open;
+const origSend=XMLHttpRequest.prototype.send;
+XMLHttpRequest.prototype.open=function(m,u,...a){
+  this.__u=typeof u==="string"?u:"";
+  return origOpen.call(this,m,u,...a);
+};
+XMLHttpRequest.prototype.send=function(...a){
+  this.addEventListener("load",()=>{
+    if(!this.__u.includes("virtualDomains"))return;
+    try{
+      const d=JSON.parse(this.responseText);
+      const rows=d.data||d.rows||(Array.isArray(d)?d:null);
+      if(!rows||!rows.length)return;
+      const keys=Object.keys(rows[0]).map(k=>k.toUpperCase());
+      if(!keys.some(k=>["CRN","DAYS","TIMES","LOCATION","COURSE"].includes(k)))return;
+      const subj=currentSubj;
+      if(subj){
+        if(!captured[subj])captured[subj]=[];
+        captured[subj].push(...rows);
+        console.log("XHR captured",rows.length,"rows for",subj);
+      }
+      if(resolveCapture){resolveCapture();resolveCapture=null;}
+    }catch(e){}
+  });
+  return origSend.call(this,...a);
+};
+
+/* ── 4. Progress overlay ── */
+const HEADERS=["Term","Course","Title","Section","CRN","Days","Times","Location","Status","Max","Now","Instructor","Delivery Mode","Credits","Info","Comments"];
+const FMAP={TERM:"Term",COURSE:"Course",TITLE:"Title",SECTION:"Section",CRN:"CRN",DAYS:"Days",TIMES:"Times",LOCATION:"Location",STATUS:"Status",MAX:"Max",NOW:"Now",INSTRUCTOR:"Instructor",INSTRUCTION_METHOD:"Delivery Mode",CREDITS:"Credits",INFO_LINK:"Info",COMMENTS:"Comments"};
+function cell(v){const s=v==null?"":String(v);return(s.includes(",")||s.includes('"')||s.includes("\\n"))?'"'+s.replace(/"/g,'""')+'"':s;}
+const ov=document.createElement("div");
+ov.style.cssText="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.85);z-index:999999;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:monospace;color:#fff;font-size:15px;gap:14px;";
+const pt=document.createElement("div");pt.textContent="Starting...";
+const pb=document.createElement("div");pb.style.cssText="width:380px;height:7px;background:#333;border-radius:4px;";
+const pf=document.createElement("div");pf.style.cssText="height:100%;background:#cc0000;border-radius:4px;width:0%;transition:width .3s;";
+const ps=document.createElement("div");ps.style.cssText="font-size:12px;color:#888;";
+pb.appendChild(pf);ov.appendChild(pt);ov.appendChild(pb);ov.appendChild(ps);
+document.body.appendChild(ov);
+
+/* ── 5. Click each subject row and capture XHR ── */
+const allRows=[];const missing=[];
+for(let i=0;i<subjects.length;i++){
+  const subj=subjects[i];
+  currentSubj=subj;
+  pt.textContent="Selecting "+subj+" ("+(i+1)+"/"+subjects.length+")";
+  pf.style.width=Math.round((i+1)/subjects.length*100)+"%";
+  ps.textContent=allRows.length+" sections captured";
+
+  // Find the subject row (first <td> equals the subject code)
+  let subjRow=null;
+  for(const tr of document.querySelectorAll("tr")){
+    const cells=[...tr.querySelectorAll("td")];
+    if(cells.length>0&&cells[0].textContent.trim()===subj){subjRow=tr;break;}
+  }
+  if(!subjRow){console.warn("Row not found:",subj);missing.push(subj);continue;}
+
+  // Click and wait up to 3s for XHR data
+  const waitP=new Promise(res=>{resolveCapture=res;setTimeout(res,3000);});
+  subjRow.click();
+  await waitP;
+
+  if(captured[subj])allRows.push(...captured[subj]);
+  else{console.warn("No XHR data for:",subj);missing.push(subj);}
+  await new Promise(r=>setTimeout(r,150));
+}
+
+XMLHttpRequest.prototype.open=origOpen;
+XMLHttpRequest.prototype.send=origSend;
+document.body.removeChild(ov);
+
+if(!allRows.length){
+  alert("No data captured.\\n\\nThe subject table rows may not be clickable.\\nTry: select a subject manually, then run the bookmarklet again — check console for 'XHR captured'.");
+  return;
+}
+
+/* ── 6. Build + download CSV ── */
+const sample=allRows[0];
+console.log("Sample row fields:",Object.keys(sample));
+console.log("Sample:",JSON.stringify(sample).slice(0,400));
+const km={};for(const k of Object.keys(sample))km[k.toUpperCase()]=k;
+function toCSV(row){
+  return HEADERS.map(h=>{
+    const ak=Object.keys(FMAP).find(k=>FMAP[k]===h);
+    return ak?cell(row[km[ak]||ak]):"";
+  }).join(",");
+}
+const csv=[HEADERS.join(","),...allRows.map(toCSV)].join("\\n");
+const fname="Course_Schedule_"+term+".csv";
+const blob=new Blob(["\\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+const url=URL.createObjectURL(blob);
+const a=document.createElement("a");a.href=url;a.download=fname;
+document.body.appendChild(a);a.click();document.body.removeChild(a);
+URL.revokeObjectURL(url);
+alert("Done! "+fname+"\\n"+allRows.length+" sections from "+(subjects.length-missing.length)+" subjects."+(missing.length?"\\n\\nMissed: "+missing.join(", "):""));
+})();`;
+
+    document.getElementById('bm-link').href = 'javascript:' + encodeURIComponent(src);
+  </script>
+</body>
+</html>

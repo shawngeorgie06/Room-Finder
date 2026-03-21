@@ -1,10 +1,10 @@
-const clockEl = document.getElementById('clock');
-const filterEl = document.getElementById('building-filter');
+const clockEl    = document.getElementById('clock');
+const filterEl   = document.getElementById('building-filter');
 const containerEl = document.getElementById('rooms-container');
-const statusEl = document.getElementById('status');
+const statusEl   = document.getElementById('status');
 
 let currentBuilding = '';
-let knownBuildings = new Set();
+let knownBuildings  = new Set();
 
 // ── Clock ──────────────────────────────────────────────────────────────────
 
@@ -30,68 +30,94 @@ function text(tag, className, content) {
   return node;
 }
 
-// ── Render ─────────────────────────────────────────────────────────────────
+// ── Format time ────────────────────────────────────────────────────────────
 
 function formatTimeUntil(minutes) {
-  if (minutes === null || minutes === undefined) return 'Free for rest of day';
-  if (minutes < 60) return `Next class in ${minutes} min`;
+  if (minutes === null || minutes === undefined) return 'FREE ALL DAY';
+  if (minutes < 60) return `~${minutes} MIN`;
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
-  return `Next class in ${h}h${m > 0 ? ' ' + m + 'm' : ''}`;
+  return m > 0 ? `${h}H ${m}M` : `${h}H`;
 }
 
-function makeCard(room) {
-  const card = el('div', 'card');
+// ── Render cards ───────────────────────────────────────────────────────────
+
+function makeCard(room, index) {
+  const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= 30;
+  const card = el('div', isSoon ? 'card soon' : 'card');
+
+  // Stagger entrance — cap at 30 cards to avoid slow tail
+  card.style.animationDelay = `${Math.min(index, 30) * 28}ms`;
 
   card.appendChild(text('div', 'card-building', room.building));
-  card.appendChild(text('div', 'card-room', `${room.building} ${room.room}`));
+  card.appendChild(text('div', 'card-room', room.room));
 
-  const badge = text('span', 'card-badge', 'Empty now');
-  card.appendChild(badge);
+  const footer = el('div', 'card-footer');
 
-  const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= 30;
-  const timeEl = text('div', isSoon ? 'card-time soon' : 'card-time', formatTimeUntil(room.minutes_until_next));
-  card.appendChild(timeEl);
+  const status = el('div', 'card-status');
+  status.appendChild(el('span', 'status-dot'));
+  status.appendChild(text('span', 'status-label', isSoon ? 'CLOSING' : 'OPEN'));
+  footer.appendChild(status);
 
+  footer.appendChild(text('div', 'card-time', formatTimeUntil(room.minutes_until_next)));
+
+  card.appendChild(footer);
   return card;
 }
 
 function renderRooms(rooms) {
-  containerEl.textContent = '';  // clear safely
+  containerEl.textContent = '';
 
   if (!rooms || rooms.length === 0) {
-    containerEl.appendChild(text('p', 'empty-state', 'No empty rooms found right now.'));
+    containerEl.appendChild(text('p', 'empty-state', 'No empty rooms right now.'));
     return;
   }
 
-  rooms.forEach(room => containerEl.appendChild(makeCard(room)));
+  const fragment = document.createDocumentFragment();
+  rooms.forEach((room, i) => fragment.appendChild(makeCard(room, i)));
+  containerEl.appendChild(fragment);
 }
 
-function updateBuildingDropdown(rooms) {
-  const incoming = rooms.map(r => r.building).filter(b => !knownBuildings.has(b));
-  if (incoming.length === 0) return;
-  incoming.forEach(b => knownBuildings.add(b));
+// ── Building chips ─────────────────────────────────────────────────────────
 
-  const sorted = [...knownBuildings].sort();
-  filterEl.textContent = '';  // clear safely
+function renderChips() {
+  filterEl.textContent = '';
 
-  const all = document.createElement('option');
-  all.value = '';
-  all.textContent = 'All Buildings';
-  filterEl.appendChild(all);
+  const allChip = el('button', currentBuilding === '' ? 'chip active' : 'chip');
+  allChip.dataset.value = '';
+  allChip.setAttribute('aria-pressed', currentBuilding === '' ? 'true' : 'false');
+  allChip.textContent = 'ALL';
+  allChip.addEventListener('click', () => selectBuilding(''));
+  filterEl.appendChild(allChip);
 
-  sorted.forEach(b => {
-    const opt = document.createElement('option');
-    opt.value = b;
-    opt.textContent = b;
-    if (b === currentBuilding) opt.selected = true;
-    filterEl.appendChild(opt);
+  [...knownBuildings].sort().forEach(b => {
+    const chip = el('button', currentBuilding === b ? 'chip active' : 'chip');
+    chip.dataset.value = b;
+    chip.setAttribute('aria-pressed', currentBuilding === b ? 'true' : 'false');
+    chip.textContent = b;
+    chip.addEventListener('click', () => selectBuilding(b));
+    filterEl.appendChild(chip);
   });
 }
 
+function selectBuilding(value) {
+  currentBuilding = value;
+  renderChips();
+  fetchRooms();
+}
+
+function updateBuildingChips(rooms) {
+  const incoming = rooms.map(r => r.building).filter(b => !knownBuildings.has(b));
+  if (incoming.length === 0) return;
+  incoming.forEach(b => knownBuildings.add(b));
+  renderChips();
+}
+
+// ── Status bar ─────────────────────────────────────────────────────────────
+
 function updateStatus(count) {
   const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  statusEl.textContent = `${count} empty room${count !== 1 ? 's' : ''} \u00b7 Updated ${t}`;
+  statusEl.textContent = `${count} room${count !== 1 ? 's' : ''} available  ·  live sync ${t}`;
 }
 
 // ── Fetch ──────────────────────────────────────────────────────────────────
@@ -106,21 +132,16 @@ async function fetchRooms() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const rooms = await resp.json();
     renderRooms(rooms);
-    updateBuildingDropdown(rooms);
+    updateBuildingChips(rooms);
     updateStatus(rooms.length);
   } catch (err) {
     containerEl.textContent = '';
-    containerEl.appendChild(text('p', 'error-state', 'Could not load rooms. Is the server running?'));
+    containerEl.appendChild(text('p', 'error-state', 'Could not reach server.'));
     console.error('Fetch error:', err);
   }
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
-
-filterEl.addEventListener('change', () => {
-  currentBuilding = filterEl.value;
-  fetchRooms();
-});
 
 fetchRooms();
 setInterval(fetchRooms, 60_000);

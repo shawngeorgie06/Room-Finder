@@ -47,7 +47,10 @@ def load_schedule(xlsx_path):
     Returns a list of dicts: building, room, days, time_start, time_end.
     Filters to Face-to-Face and Hybrid only. Skips rows with blank locations.
     """
-    df = pd.read_excel(xlsx_path, dtype=str)
+    if str(xlsx_path).endswith(".csv"):
+        df = pd.read_csv(xlsx_path, dtype=str)
+    else:
+        df = pd.read_excel(xlsx_path, dtype=str)
     df.columns = [c.strip() for c in df.columns]
 
     results = []

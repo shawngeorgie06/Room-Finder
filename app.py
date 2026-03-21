@@ -14,7 +14,7 @@ def create_app(schedule=None):
     app = Flask(__name__)
 
     if schedule is None:
-        xlsx_path = os.path.join(os.path.dirname(__file__), "Course_Schedule_All_Subjects.xlsx")
+        xlsx_path = os.path.join(os.path.dirname(__file__), "Course_Schedule_202610.csv")
         schedule = load_schedule(xlsx_path)
         print(f"Loaded {len(schedule)} schedule entries.")
 

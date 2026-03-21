@@ -5,3 +5,7 @@ __pycache__/
 package.json
 start.cmd
 start.sh
+
+# Schedule data — not committed, regenerate via bookmarklet each semester
+*.csv
+*.xlsx
