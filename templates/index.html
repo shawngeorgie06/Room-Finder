@@ -1,43 +1,673 @@
 <!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>NJIT Empty Rooms</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css" />
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>NJIT Room Finder</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        colors: {
+          "inverse-primary": "#006e35","tertiary": "#6e9bff","outline-variant": "#484847",
+          "on-secondary-container": "#fff6f4","primary-fixed-dim": "#24f07e",
+          "on-tertiary-fixed-variant": "#003580","surface": "#0e0e0e","secondary": "#ff7166",
+          "surface-variant": "#262626","error": "#ff716c","background": "#0e0e0e",
+          "primary-container": "#13ea79","tertiary-container": "#2778fe",
+          "on-primary-fixed-variant": "#006832","error-container": "#9f0519","primary": "#3fff8b",
+          "on-secondary-fixed-variant": "#a60010","on-error-container": "#ffa8a3",
+          "secondary-dim": "#e51a22","surface-container-lowest": "#000000",
+          "secondary-container": "#c00014","tertiary-fixed": "#8eafff",
+          "on-primary-container": "#004f24","surface-dim": "#0e0e0e",
+          "on-secondary-fixed": "#700007","surface-bright": "#2c2c2c","error-dim": "#d7383b",
+          "on-surface-variant": "#adaaaa","secondary-fixed-dim": "#ffb0a7",
+          "on-surface": "#ffffff","outline": "#767575","primary-dim": "#24f07e",
+          "tertiary-dim": "#0f6df3","on-tertiary": "#001d4e","inverse-surface": "#fcf9f8",
+          "on-tertiary-fixed": "#00163d","on-error": "#490006","secondary-fixed": "#ffc3bd",
+          "surface-container-high": "#201f1f","on-secondary": "#4a0003",
+          "on-background": "#ffffff","inverse-on-surface": "#565555","surface-tint": "#3fff8b",
+          "primary-fixed": "#3fff8b","tertiary-fixed-dim": "#77a1ff",
+          "on-tertiary-container": "#000000","surface-container-low": "#131313",
+          "surface-container-highest": "#262626","surface-container": "#1a1919",
+          "on-primary": "#005d2c","on-primary-fixed": "#004820"
+        },
+        fontFamily: { "headline": ["Space Grotesk"],"body": ["Manrope"],"label": ["Space Grotesk"] },
+        borderRadius: {"DEFAULT": "0.125rem","lg": "0.25rem","xl": "0.5rem","full": "0.75rem"},
+      },
+    },
+  }
+</script>
+<style>
+  .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+  .kinetic-grid {
+    background-image: radial-gradient(circle at 2px 2px, rgba(63, 255, 139, 0.05) 1px, transparent 0);
+    background-size: 32px 32px;
+  }
+  .glass-card {
+    background: linear-gradient(135deg, rgba(26, 25, 25, 0.8), rgba(14, 14, 14, 0.95));
+    backdrop-filter: blur(12px);
+  }
+  .scanline {
+    width: 100%; height: 100px; z-index: 100;
+    background: linear-gradient(0deg, rgba(0,0,0,0) 0%, rgba(63,255,139,0.02) 50%, rgba(0,0,0,0) 100%);
+    opacity: 0.1; position: absolute; bottom: 100%;
+    animation: scanline 10s linear infinite; pointer-events: none;
+  }
+  @keyframes scanline { 0% { bottom: 100%; } 100% { bottom: -100px; } }
+  .heatmap-cell:hover { filter: brightness(1.5); box-shadow: 0 0 15px rgba(63,255,139,0.5); z-index: 10; }
+  .active-nav { background: rgba(63,255,139,0.1) !important; color: #3fff8b !important; border-left: 2px solid #3fff8b !important; }
+  /* Leaflet */
+  .leaflet-container { background: #080808 !important; font-family: 'Space Grotesk', sans-serif; }
+  .leaflet-control-zoom a { background: #1a1919 !important; color: #3fff8b !important; border-color: rgba(63,255,139,0.2) !important; }
+  .leaflet-control-attribution { background: rgba(0,0,0,0.7) !important; color: #767575 !important; font-size: 9px !important; }
+  .leaflet-control-attribution a { color: #adaaaa !important; }
+  /* Leaflet popup dark theme */
+  .kinetic-popup .leaflet-popup-content-wrapper {
+    background: #0e0e0e;
+    border: 1px solid rgba(63,255,139,0.2);
+    border-radius: 3px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.8), 0 0 0 1px rgba(63,255,139,0.05);
+    padding: 0;
+  }
+  .kinetic-popup .leaflet-popup-content { margin: 14px 16px; }
+  .kinetic-popup .leaflet-popup-tip-container { display: none; }
+  .kinetic-popup .leaflet-popup-close-button {
+    color: #767575 !important;
+    font-size: 18px !important;
+    padding: 6px 8px !important;
+    top: 2px !important;
+    right: 2px !important;
+  }
+  .kinetic-popup .leaflet-popup-close-button:hover { color: #fff !important; }
+  .room-card-in { animation: card-in 0.3s ease both; }
+  @keyframes card-in { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+</style>
 </head>
-<body>
-  <div class="bg-grid" aria-hidden="true"></div>
+<body class="bg-[#080808] text-on-background font-body selection:bg-primary selection:text-on-primary overflow-x-hidden">
+<div class="scanline"></div>
 
-  <header>
-    <div class="header-inner">
-      <div class="brand">
-        <span class="brand-dot" aria-hidden="true"></span>
-        <span class="brand-name">NJIT ROOMS</span>
-      </div>
-      <div class="clock" id="clock" aria-live="off">--:--:--</div>
+<!-- TOP NAVIGATION -->
+<header class="fixed top-0 w-full z-50 flex justify-between items-center px-6 h-16 bg-[#0e0e0e]/90 backdrop-blur-md text-[#00E676] font-headline tracking-tighter uppercase border-b border-primary/20 shadow-[0_0_30px_rgba(0,0,0,0.5)]">
+  <div class="flex items-center gap-4">
+    <div class="flex items-center gap-2">
+      <span class="w-2 h-2 bg-primary shadow-[0_0_8px_#3fff8b]"></span>
+      <span class="text-xl font-bold tracking-widest text-[#00E676]">NJIT Room Finder</span>
     </div>
-    <div class="header-status" id="status" aria-live="polite"></div>
-  </header>
-
-  <main>
-    <div class="filter-bar" role="toolbar" aria-label="Filter by building">
-      <div class="filter-chips" id="building-filter">
-        <button class="chip active" data-value="" aria-pressed="true">ALL</button>
-      </div>
+  </div>
+  <div class="flex items-center gap-4">
+    <div class="flex items-center gap-4 px-4 border-r border-outline-variant/30 text-[10px] font-label tracking-widest hidden sm:flex">
+      <span class="text-on-surface-variant">Empty Rooms: <span id="hdr-empty" class="text-primary">--</span></span>
+      <span class="text-on-surface-variant">Occupancy: <span id="hdr-occ" class="text-tertiary">--%</span></span>
     </div>
-
-    <div class="rooms" id="rooms-container" aria-label="Available rooms">
-      <div class="loading" aria-live="polite">
-        <span class="loading-dot" aria-hidden="true"></span>
-        <span>Scanning campus&hellip;</span>
+    <div class="flex items-center gap-3 pl-4 border-l border-outline-variant/30">
+      <div id="hdr-clock" class="text-xs font-bold text-primary tabular-nums hidden sm:block">--:--:--</div>
+      <div class="w-9 h-9 rounded-sm bg-surface-container border border-outline-variant/20 flex items-center justify-center">
+        <span class="material-symbols-outlined text-on-surface-variant">person</span>
       </div>
     </div>
-  </main>
+  </div>
+</header>
 
-  <script src="/static/app.js"></script>
-</body>
-</html>
+<!-- SIDEBAR -->
+<aside class="fixed left-0 top-16 h-[calc(100vh-64px)] w-64 hidden md:flex flex-col pt-4 bg-[#080808] border-r border-primary/5 z-40">
+  <div class="px-6 mb-8">
+    <div class="text-sm font-black text-[#00E676] font-headline tracking-widest">NJIT Room Finder</div>
+    <div class="text-[10px] text-on-surface-variant font-label tracking-[0.2em] mt-1 opacity-50 uppercase">Spring 2026 · Live</div>
+  </div>
+  <nav class="flex-1 px-3 space-y-1">
+    <a id="nav-dashboard" href="#" onclick="switchView('dashboard');return false;"
+       class="active-nav px-4 py-3 flex items-center gap-3 transition-all font-headline text-sm tracking-tight rounded-sm">
+      <span class="material-symbols-outlined text-xl">grid_view</span><span>Dashboard</span>
+    </a>
+    <a id="nav-rooms" href="#" onclick="switchView('rooms');return false;"
+       class="text-on-surface-variant/60 px-4 py-3 flex items-center gap-3 hover:bg-surface-container hover:text-white transition-all font-headline text-sm tracking-tight rounded-sm">
+      <span class="material-symbols-outlined text-xl">meeting_room</span><span>Room Grid</span>
+    </a>
+    <a id="nav-map" href="#" onclick="switchView('map');return false;"
+       class="text-on-surface-variant/60 px-4 py-3 flex items-center gap-3 hover:bg-surface-container hover:text-white transition-all font-headline text-sm tracking-tight rounded-sm">
+      <span class="material-symbols-outlined text-xl">map</span><span>Campus Map</span>
+    </a>
+    <a id="nav-settings" href="#" onclick="switchView('settings');return false;"
+       class="text-on-surface-variant/60 px-4 py-3 flex items-center gap-3 hover:bg-surface-container hover:text-white transition-all font-headline text-sm tracking-tight rounded-sm">
+      <span class="material-symbols-outlined text-xl">settings</span><span>Settings</span>
+    </a>
+  </nav>
+  <div class="p-4 space-y-4 mt-auto">
+    <div class="bg-surface-container/50 p-3 border border-outline-variant/10 rounded-sm">
+      <div class="text-[10px] font-label text-on-surface-variant mb-2">System Status</div>
+      <div class="flex items-center gap-2">
+        <div class="w-2 h-2 rounded-full bg-primary animate-pulse"></div>
+        <span class="text-[11px] font-bold text-primary">Live · Auto-refresh</span>
+      </div>
+      <div id="sidebar-status" class="text-[9px] text-on-surface-variant mt-1 tracking-wider"></div>
+    </div>
+  </div>
+</aside>
+
+<!-- MAIN CONTENT -->
+<main class="md:ml-64 pt-20 pb-20 md:pb-12 min-h-screen">
+
+  <!-- ═══ DASHBOARD VIEW ═══ -->
+  <div id="view-dashboard" class="px-8 kinetic-grid min-h-screen">
+    <div class="max-w-[1600px] mx-auto space-y-8">
+
+      <!-- Page Header -->
+      <div class="flex flex-col xl:flex-row xl:items-end justify-between gap-6 border-b border-outline-variant/10 pb-6">
+        <div>
+          <div class="flex items-center gap-3 mb-1">
+            <span class="px-2 py-0.5 bg-primary/20 text-primary text-[10px] font-bold border border-primary/30 tracking-[0.2em]">LIVE</span>
+            <span class="text-on-surface-variant font-label text-xs uppercase tracking-[0.1em]">Spring 2026 · Auto-refresh 60s</span>
+          </div>
+          <h1 class="text-5xl font-headline font-extrabold tracking-tighter text-white">Campus Overview</h1>
+          <button onclick="openFindRoom()"
+                  class="mt-3 inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-on-primary font-headline font-bold text-sm rounded-sm hover:brightness-110 transition-all shadow-[0_0_20px_rgba(63,255,139,0.25)]">
+            <span class="material-symbols-outlined text-base">search</span>
+            Find Me a Room
+          </button>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div class="px-5 py-3 bg-surface-container/40 border-l-2 border-outline-variant/40 rounded-sm min-w-0">
+            <div class="text-[10px] text-on-surface-variant font-label tracking-widest uppercase mb-1">Total Rooms</div>
+            <div id="stat-total" class="text-2xl font-headline font-bold text-white leading-none">--</div>
+          </div>
+          <div class="px-5 py-3 bg-surface-container/40 border-l-2 border-primary rounded-sm min-w-0">
+            <div class="text-[10px] text-on-surface-variant font-label tracking-widest uppercase mb-1">Empty Now</div>
+            <div id="stat-empty" class="text-2xl font-headline font-bold text-primary leading-none">--</div>
+          </div>
+          <div class="px-5 py-3 bg-surface-container/40 border-l-2 border-tertiary rounded-sm min-w-0">
+            <div class="text-[10px] text-on-surface-variant font-label tracking-widest uppercase mb-1">Occupancy</div>
+            <div id="stat-occ" class="text-2xl font-headline font-bold text-tertiary leading-none">--%</div>
+          </div>
+          <div class="px-5 py-3 bg-surface-container/40 border-l-2 border-outline-variant/40 rounded-sm min-w-0">
+            <div class="text-[10px] text-on-surface-variant font-label tracking-widest uppercase mb-1">Buildings</div>
+            <div id="stat-bldg" class="text-2xl font-headline font-bold text-on-surface-variant leading-none">--</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dashboard Grid -->
+      <div class="grid grid-cols-12 gap-6">
+
+        <!-- CAMPUS MAP (replaces heatmap) -->
+        <div class="col-span-12 xl:col-span-9 glass-card border border-primary/10 rounded-sm relative overflow-hidden" style="min-height:280px">
+          <div class="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-5 py-3 bg-gradient-to-b from-[#080808]/95 to-transparent pointer-events-none">
+            <div>
+              <div class="text-[9px] text-on-surface-variant/60 font-label tracking-[0.25em] uppercase mb-0.5">Campus Map</div>
+              <div class="text-sm font-headline font-bold text-white">Click a building to view floor plan</div>
+            </div>
+            <div class="flex items-center gap-3 pointer-events-auto">
+              <div class="flex items-center gap-3 text-[9px] font-label text-on-surface-variant uppercase tracking-wider">
+                <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-primary inline-block"></span>Free</span>
+                <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>Half</span>
+                <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-secondary inline-block"></span>Busy</span>
+              </div>
+              <button onclick="switchView('map')" class="px-4 py-1.5 text-[10px] font-bold bg-primary/10 border border-primary/30 text-primary rounded-sm uppercase tracking-widest hover:bg-primary/20 transition-all">Full Map ↗</button>
+            </div>
+          </div>
+          <div id="dash-map-container" class="absolute inset-0"></div>
+        </div>
+
+        <!-- LIVE ROOM FEED -->
+        <div class="col-span-12 xl:col-span-3 glass-card border border-primary/10 flex flex-col rounded-sm">
+          <div class="p-5 border-b border-primary/10 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="w-1.5 h-1.5 bg-primary animate-pulse rounded-full"></span>
+              <h3 class="text-xs font-label uppercase tracking-widest text-on-surface">Live Room Feed</h3>
+            </div>
+            <span class="text-[10px] font-label text-primary">Streaming live</span>
+          </div>
+          <div id="live-feed" class="flex-1 overflow-y-auto max-h-[420px] p-4 space-y-4"></div>
+          <div class="p-4 border-t border-primary/10">
+            <button onclick="switchView('rooms')" class="w-full py-2 bg-primary/5 text-primary text-[10px] font-bold uppercase tracking-widest border border-primary/10 hover:bg-primary/20 transition-all">
+              View All Rooms
+            </button>
+          </div>
+        </div>
+
+        <!-- SYSTEM HEALTH (decorative but styled) -->
+        <div class="hidden lg:flex col-span-12 lg:col-span-5 glass-card border border-primary/10 p-6 rounded-sm relative overflow-hidden group flex-col">
+          <div class="flex items-center justify-between mb-8">
+            <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-primary text-xl">monitor_heart</span>
+              <h3 class="text-xs font-label uppercase tracking-[0.2em] text-on-surface">Schedule Data Health</h3>
+            </div>
+            <div class="flex items-center gap-2 px-2 py-1 bg-primary/10 border border-primary/30 rounded-sm">
+              <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
+              <span class="text-[9px] font-bold text-primary tracking-widest">STABLE</span>
+            </div>
+          </div>
+          <div class="space-y-6">
+            <div id="building-bars" class="relative flex items-end gap-1 h-20 mb-2">
+              <!-- filled by JS -->
+            </div>
+            <div class="grid grid-cols-3 gap-6 py-6 border-y border-outline-variant/10">
+              <div>
+                <div class="text-[9px] text-on-surface-variant font-label tracking-widest mb-1 uppercase">Sections Loaded</div>
+                <div id="health-sections" class="text-xl font-headline font-bold text-white">--</div>
+              </div>
+              <div>
+                <div class="text-[9px] text-on-surface-variant font-label tracking-widest mb-1 uppercase">Buildings</div>
+                <div id="health-bldg" class="text-xl font-headline font-bold text-white">--</div>
+              </div>
+              <div>
+                <div class="text-[9px] text-on-surface-variant font-label tracking-widest mb-1 uppercase">Avg Occupancy</div>
+                <div id="health-occ" class="text-xl font-headline font-bold text-white">--%</div>
+              </div>
+            </div>
+            <div class="flex items-center gap-4 pt-2">
+              <div class="flex-1 h-1 bg-surface-container rounded-full overflow-hidden">
+                <div id="health-bar" class="h-full bg-primary shadow-[0_0_8px_#3fff8b] transition-all" style="width:0%"></div>
+              </div>
+              <span id="health-bar-label" class="text-[10px] font-label text-on-surface-variant">LOADING...</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- EMPTY ROOMS TABLE -->
+        <div class="col-span-12 lg:col-span-7 glass-card border border-white/5 p-6 rounded-sm relative group">
+          <div class="flex flex-col gap-3 mb-6">
+            <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-primary text-xl">meeting_room</span>
+              <h3 class="text-xs font-label uppercase tracking-[0.2em] text-on-surface">Currently Available Rooms</h3>
+            </div>
+            <p class="text-[10px] text-on-surface-variant tracking-widest">Rooms free right now.</p>
+            <div id="dash-building-filter" class="flex flex-wrap gap-1.5"></div>
+          </div>
+          <div id="dash-rooms" class="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-[200px] overflow-y-auto"></div>
+        </div>
+
+        <!-- AVAILABLE ROOMS TABLE (full width) -->
+        <div class="hidden lg:block col-span-12 glass-card border border-white/5 rounded-sm overflow-hidden">
+          <div class="p-4 sm:p-6 border-b border-primary/10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-surface-container/20">
+            <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-primary">table_rows</span>
+              <h3 class="text-xs font-label uppercase tracking-[0.2em] text-on-surface">Available Room Directory</h3>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="text-[10px] text-on-surface-variant font-label tracking-widest uppercase">
+                <span id="table-count" class="text-primary">--</span> rooms free
+              </span>
+              <button onclick="switchView('rooms')" class="flex items-center gap-2 px-3 py-1.5 bg-primary text-on-primary font-bold text-xs rounded-sm hover:brightness-110 transition-all whitespace-nowrap">
+                <span class="material-symbols-outlined text-sm">open_in_full</span> Full View
+              </button>
+            </div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left">
+              <thead>
+                <tr class="bg-black/40 text-on-surface-variant text-[10px] font-label uppercase tracking-widest border-b border-primary/5">
+                  <th class="px-3 sm:px-6 py-3 font-bold">Building</th>
+                  <th class="px-3 sm:px-6 py-3 font-bold">Room</th>
+                  <th class="px-3 sm:px-6 py-3 font-bold hidden sm:table-cell">Status</th>
+                  <th class="px-3 sm:px-6 py-3 font-bold hidden sm:table-cell">Free Until</th>
+                  <th class="px-3 sm:px-6 py-3 font-bold">Time Left</th>
+                </tr>
+              </thead>
+              <tbody id="rooms-table-body" class="divide-y divide-primary/5 text-sm"></tbody>
+            </table>
+          </div>
+          <div class="p-4 bg-black/60 border-t border-primary/5 flex justify-center">
+            <button onclick="switchView('rooms')" class="text-[10px] font-bold text-primary tracking-[0.4em] uppercase hover:tracking-[0.6em] transition-all">Expand Full Directory</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ ROOM GRID VIEW ═══ -->
+  <div id="view-rooms" class="hidden px-8 kinetic-grid min-h-screen">
+    <div class="max-w-[1400px] mx-auto py-6">
+      <div class="flex items-center justify-between mb-6 border-b border-outline-variant/10 pb-4">
+        <div>
+          <div class="text-[10px] text-primary font-label tracking-widest uppercase mb-1">LIVE · SPRING 2026</div>
+          <h2 class="text-3xl font-headline font-extrabold tracking-tighter text-white">AVAILABLE ROOMS</h2>
+        </div>
+        <span id="grid-count" class="text-[10px] text-on-surface-variant font-label tracking-widest uppercase"></span>
+      </div>
+      <!-- Time Filter -->
+      <div class="flex flex-wrap items-center gap-3 mb-4 px-4 py-3 glass-card border border-primary/10 rounded-sm">
+        <span class="material-symbols-outlined text-primary" style="font-size:18px">schedule</span>
+        <span class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap">Free at</span>
+        <input type="time" id="time-filter-at"
+               class="bg-transparent border border-outline-variant/30 text-primary text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none"
+               style="color-scheme:dark"/>
+        <span class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap">for at least</span>
+        <select id="time-filter-for"
+                class="bg-[#0e0e0e] border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">
+          <option value="0">Any duration</option>
+          <option value="30">30 min</option>
+          <option value="60">1 hour</option>
+          <option value="90">1.5 hrs</option>
+          <option value="120">2 hrs</option>
+          <option value="180">3 hrs</option>
+        </select>
+        <button onclick="applyTimeFilter()"
+                class="px-4 py-1.5 text-[10px] font-bold bg-primary/10 border border-primary/30 text-primary rounded-sm uppercase tracking-widest hover:bg-primary/20 transition-all">
+          Apply
+        </button>
+        <button onclick="resetTimeFilter()"
+                class="px-3 py-1.5 text-[10px] font-bold text-on-surface-variant border border-outline-variant/20 rounded-sm uppercase tracking-widest hover:text-white transition-all">
+          Reset to Now
+        </button>
+        <span id="time-filter-indicator"
+              class="hidden px-2 py-0.5 bg-tertiary/20 border border-tertiary/30 text-tertiary text-[9px] font-bold font-label tracking-wider rounded-sm">
+          CUSTOM TIME ACTIVE
+        </span>
+      </div>
+
+      <div id="building-filter" class="flex gap-2 overflow-x-auto pb-3 mb-6" style="scrollbar-width:none"></div>
+      <div id="rooms-container" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3"></div>
+    </div>
+  </div>
+
+  <!-- ═══ MAP VIEW ═══ -->
+  <div id="view-map" class="hidden relative" style="height:calc(100vh - 64px)">
+    <div id="map-container" class="absolute inset-0 z-0"></div>
+    <div class="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-6 py-3 bg-gradient-to-b from-[#080808]/90 to-transparent pointer-events-none">
+      <div>
+        <div class="text-[9px] text-primary font-label tracking-widest uppercase mb-0.5">Campus Map · Real Time</div>
+        <div class="text-sm font-headline font-bold text-white">Click a building to view floor plan</div>
+      </div>
+      <div class="flex items-center gap-4 text-[9px] font-label text-on-surface-variant uppercase tracking-wider pointer-events-auto">
+        <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-primary inline-block"></span>Mostly Free</span>
+        <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>Half Full</span>
+        <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-secondary inline-block"></span>Mostly Occupied</span>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══ SETTINGS VIEW ═══ -->
+  <div id="view-settings" class="hidden px-8 kinetic-grid min-h-screen">
+    <div class="max-w-2xl mx-auto py-10 space-y-8">
+
+      <!-- Header -->
+      <div class="border-b border-outline-variant/10 pb-6">
+        <div class="text-[10px] text-primary font-label tracking-widest uppercase mb-1">Configuration</div>
+        <h2 class="text-4xl font-headline font-extrabold tracking-tighter text-white">Settings</h2>
+        <p class="text-sm text-on-surface-variant mt-1">Manage schedule data and application configuration.</p>
+      </div>
+
+      <!-- Current Schedule Info -->
+      <div class="glass-card border border-primary/10 rounded-sm overflow-hidden">
+        <div class="px-6 py-4 border-b border-primary/10 flex items-center gap-3 bg-black/20">
+          <span class="material-symbols-outlined text-primary">database</span>
+          <h3 class="text-xs font-label uppercase tracking-[0.25em] text-on-surface">Current Schedule Data</h3>
+        </div>
+        <div id="schedule-info-grid" class="grid grid-cols-2 sm:grid-cols-4 divide-x divide-primary/5">
+          <div class="px-5 py-5">
+            <div class="text-[9px] text-on-surface-variant font-label tracking-widest uppercase mb-1">Entries</div>
+            <div id="si-entries" class="text-2xl font-headline font-bold text-white">--</div>
+          </div>
+          <div class="px-5 py-5">
+            <div class="text-[9px] text-on-surface-variant font-label tracking-widest uppercase mb-1">Buildings</div>
+            <div id="si-buildings" class="text-2xl font-headline font-bold text-white">--</div>
+          </div>
+          <div class="px-5 py-5">
+            <div class="text-[9px] text-on-surface-variant font-label tracking-widest uppercase mb-1">Rooms</div>
+            <div id="si-rooms" class="text-2xl font-headline font-bold text-white">--</div>
+          </div>
+          <div class="px-5 py-5">
+            <div class="text-[9px] text-on-surface-variant font-label tracking-widest uppercase mb-1">Last Updated</div>
+            <div id="si-loaded" class="text-xs font-label font-bold text-primary leading-tight mt-1">--</div>
+          </div>
+        </div>
+        <div class="px-6 py-3 border-t border-primary/10 bg-black/20">
+          <div class="text-[9px] text-on-surface-variant font-label tracking-widest uppercase mb-0.5">File</div>
+          <div id="si-filename" class="text-xs font-label text-white truncate">--</div>
+        </div>
+      </div>
+
+      <!-- Upload New Schedule -->
+      <div class="glass-card border border-primary/10 rounded-sm overflow-hidden">
+        <div class="px-6 py-4 border-b border-primary/10 flex items-center gap-3 bg-black/20">
+          <span class="material-symbols-outlined text-primary">upload_file</span>
+          <div>
+            <h3 class="text-xs font-label uppercase tracking-[0.25em] text-on-surface">Upload New Schedule</h3>
+            <p class="text-[10px] text-on-surface-variant mt-0.5">CSV exported from Banner SSB — updates live immediately, no restart needed.</p>
+          </div>
+        </div>
+        <div class="p-6 space-y-5">
+
+          <!-- Drop zone -->
+          <div id="drop-zone"
+               class="border-2 border-dashed border-outline-variant/30 rounded-sm p-10 text-center transition-all cursor-pointer hover:border-primary/50 hover:bg-primary/5"
+               onclick="document.getElementById('csv-file-input').click()"
+               ondragover="event.preventDefault();this.classList.add('border-primary','bg-primary/10')"
+               ondragleave="this.classList.remove('border-primary','bg-primary/10')"
+               ondrop="handleDrop(event)">
+            <span class="material-symbols-outlined text-4xl text-on-surface-variant/40 block mb-3">csv</span>
+            <div class="text-sm font-headline font-bold text-white mb-1">Drop CSV file here</div>
+            <div class="text-xs text-on-surface-variant">or click to browse</div>
+            <input id="csv-file-input" type="file" accept=".csv" class="hidden" onchange="handleFileSelect(this.files[0])"/>
+          </div>
+
+          <!-- Selected file preview -->
+          <div id="file-preview" class="hidden flex items-center gap-3 px-4 py-3 bg-primary/5 border border-primary/20 rounded-sm">
+            <span class="material-symbols-outlined text-primary text-xl">description</span>
+            <div class="flex-1 min-w-0">
+              <div id="file-preview-name" class="text-sm font-label font-bold text-white truncate"></div>
+              <div id="file-preview-size" class="text-[10px] text-on-surface-variant mt-0.5"></div>
+            </div>
+            <button onclick="clearFileSelection()" class="text-on-surface-variant hover:text-white transition-colors">
+              <span class="material-symbols-outlined text-lg">close</span>
+            </button>
+          </div>
+
+          <!-- Status message -->
+          <div id="upload-status" class="hidden px-4 py-3 rounded-sm text-xs font-label font-bold tracking-wide"></div>
+
+          <!-- Upload button -->
+          <button id="upload-btn" onclick="uploadSchedule()" disabled
+                  class="w-full py-3 bg-primary/10 border border-primary/20 text-primary/40 font-headline font-bold text-sm uppercase tracking-widest rounded-sm transition-all cursor-not-allowed">
+            Upload &amp; Apply Schedule
+          </button>
+
+        </div>
+      </div>
+
+      <!-- How to get the CSV -->
+      <div class="glass-card border border-outline-variant/10 rounded-sm overflow-hidden">
+        <div class="px-6 py-4 border-b border-outline-variant/10 flex items-center gap-3 bg-black/20">
+          <span class="material-symbols-outlined text-on-surface-variant">help_outline</span>
+          <h3 class="text-xs font-label uppercase tracking-[0.25em] text-on-surface-variant">How to Export the Schedule CSV</h3>
+        </div>
+        <ol class="px-6 py-5 space-y-3 text-sm text-on-surface-variant list-none">
+          <li class="flex gap-3"><span class="text-primary font-bold font-label text-xs mt-0.5 flex-shrink-0">01</span><span>Open <code class="text-primary text-xs bg-primary/10 px-1.5 py-0.5 rounded-sm">bookmarklet/install.html</code> in your browser and drag the bookmarklet to your bookmarks bar.</span></li>
+          <li class="flex gap-3"><span class="text-primary font-bold font-label text-xs mt-0.5 flex-shrink-0">02</span><span>Go to <a href="https://generalssb-prod.ec.njit.edu/BannerExtensibility/customPage/page/stuRegCrseSched" target="_blank" class="text-primary underline underline-offset-2">Banner Course Schedule</a> and log in.</span></li>
+          <li class="flex gap-3"><span class="text-primary font-bold font-label text-xs mt-0.5 flex-shrink-0">03</span><span>Select the current term and wait for the page to fully load.</span></li>
+          <li class="flex gap-3"><span class="text-primary font-bold font-label text-xs mt-0.5 flex-shrink-0">04</span><span>Click the bookmarklet — it will loop through all subjects and download a combined CSV automatically.</span></li>
+          <li class="flex gap-3"><span class="text-primary font-bold font-label text-xs mt-0.5 flex-shrink-0">05</span><span>Upload that CSV file here. The schedule updates instantly — no server restart needed.</span></li>
+        </ol>
+      </div>
+
+    </div>
+  </div>
+
+</main>
+
+<!-- FOOTER -->
+<footer class="fixed bottom-0 md:left-64 left-0 right-0 h-10 bg-[#0e0e0e] border-t border-primary/20 hidden md:flex items-center justify-between px-8 z-40 backdrop-blur-xl">
+  <div class="flex items-center gap-8 text-[9px] font-label text-on-surface-variant tracking-[0.2em] uppercase">
+    <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-primary shadow-[0_0_5px_#3fff8b]"></span><span>Schedule Loaded</span></div>
+    <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-primary"></span><span>Spring 2026</span></div>
+    <div class="flex items-center gap-2"><span class="text-outline">Last sync:</span><span id="footer-sync" class="text-primary">--:--</span></div>
+  </div>
+  <div class="text-[9px] font-label text-primary font-bold tracking-widest uppercase italic">NJIT Room Finder · Live</div>
+</footer>
+
+
+<!-- ═══ BUILDING PANEL (global fixed, slides in from right) ═══ -->
+<div id="floor-panel" class="fixed top-16 bottom-0 right-0 bg-[#080808] border-l border-primary/20 flex flex-col" style="width:460px;max-width:100%;transform:translateX(100%);transition:transform 0.35s cubic-bezier(0.4,0,0.2,1);z-index:9999">
+  <!-- Header -->
+  <div class="flex items-center justify-between px-5 py-4 border-b border-primary/10 bg-black/50 flex-shrink-0">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-sm bg-primary/10 border border-primary/30 flex items-center justify-center">
+        <span class="material-symbols-outlined text-primary text-lg">apartment</span>
+      </div>
+      <div>
+        <div class="text-[9px] text-primary font-label tracking-[0.25em] uppercase mb-0.5">Building // Live</div>
+        <div id="panel-building" class="text-2xl font-headline font-black text-white leading-none">--</div>
+      </div>
+    </div>
+    <button onclick="closeFloorPanel()" class="w-9 h-9 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
+      <span class="material-symbols-outlined text-xl">close</span>
+    </button>
+  </div>
+  <!-- Stats -->
+  <div class="grid grid-cols-3 divide-x divide-primary/10 border-b border-primary/10 flex-shrink-0">
+    <div class="py-3 text-center">
+      <div id="ps-free" class="text-xl font-headline font-bold text-primary">--</div>
+      <div class="text-[8px] text-on-surface-variant font-label tracking-widest uppercase mt-0.5">Free</div>
+    </div>
+    <div class="py-3 text-center">
+      <div id="ps-busy" class="text-xl font-headline font-bold text-secondary">--</div>
+      <div class="text-[8px] text-on-surface-variant font-label tracking-widest uppercase mt-0.5">In Use</div>
+    </div>
+    <div class="py-3 text-center">
+      <div id="ps-total" class="text-xl font-headline font-bold text-white">--</div>
+      <div class="text-[8px] text-on-surface-variant font-label tracking-widest uppercase mt-0.5">Total</div>
+    </div>
+  </div>
+  <!-- Floor tabs -->
+  <div id="floor-tabs-wrap" class="px-4 py-3 border-b border-primary/10 flex-shrink-0">
+    <div class="text-[9px] text-on-surface-variant font-label tracking-widest uppercase mb-2">Select Floor</div>
+    <div id="floor-tabs" class="flex flex-wrap gap-1.5"></div>
+  </div>
+  <!-- Search -->
+  <div id="panel-search-wrap" class="px-4 py-2.5 border-b border-primary/10 flex-shrink-0">
+    <div class="flex items-center gap-2 bg-white/5 border border-white/10 rounded-sm px-3 py-1.5 focus-within:border-primary/40 transition-colors">
+      <span class="material-symbols-outlined text-sm text-outline">search</span>
+      <input id="panel-search" type="text" placeholder="Search room number…" class="bg-transparent border-none text-xs font-label text-white placeholder:text-outline focus:ring-0 w-full" oninput="filterFloorRooms(this.value)"/>
+    </div>
+  </div>
+  <!-- Room grid -->
+  <div class="flex-1 overflow-y-auto p-4" style="scrollbar-width:thin;scrollbar-color:rgba(63,255,139,0.15) transparent">
+    <div id="floor-rooms" class="grid grid-cols-3 gap-2.5"></div>
+  </div>
+  <!-- Legend -->
+  <div class="px-4 py-3 border-t border-primary/10 bg-black/40 flex-shrink-0 flex items-center justify-between">
+    <div class="flex gap-4 text-[9px] font-label text-on-surface-variant uppercase tracking-wider">
+      <span class="flex items-center gap-1.5"><span class="w-2 h-2 border border-primary bg-primary/20 inline-block rounded-sm"></span>Free</span>
+      <span class="flex items-center gap-1.5"><span class="w-2 h-2 border border-amber-500 bg-amber-500/20 inline-block rounded-sm"></span>Closing soon</span>
+      <span class="flex items-center gap-1.5"><span class="w-2 h-2 border border-secondary bg-secondary/20 inline-block rounded-sm"></span>In Use</span>
+    </div>
+    <div id="floor-room-count" class="text-[9px] font-label text-on-surface-variant tabular-nums"></div>
+  </div>
+</div>
+
+<!-- ═══ ROOM DETAIL SHEET (slides up from bottom) ═══ -->
+<div id="room-detail-backdrop" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9998] hidden" onclick="closeRoomDetail()"></div>
+<div id="room-detail-sheet"
+     class="fixed inset-x-0 bottom-0 bg-[#080808] border-t border-primary/20 flex flex-col z-[9999]"
+     style="height:78vh;transform:translateY(100%);transition:transform 0.35s cubic-bezier(0.4,0,0.2,1)">
+  <!-- Drag handle -->
+  <div class="flex justify-center pt-3 pb-1 flex-shrink-0 cursor-pointer" onclick="closeRoomDetail()">
+    <div class="w-10 h-1 bg-outline-variant/40 rounded-full"></div>
+  </div>
+  <!-- Header -->
+  <div class="flex items-center justify-between px-5 py-3 border-b border-primary/10 flex-shrink-0">
+    <div>
+      <div id="rds-building" class="text-[9px] text-primary font-label tracking-[0.25em] uppercase mb-0.5">--</div>
+      <div id="rds-room" class="text-3xl font-headline font-black text-white leading-none">--</div>
+    </div>
+    <div class="flex items-center gap-3">
+      <div id="rds-status" class="px-3 py-1 rounded-sm text-[10px] font-bold font-label tracking-wider uppercase"></div>
+      <button onclick="closeRoomDetail()" class="w-9 h-9 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+  </div>
+  <!-- Meta -->
+  <div class="flex items-center justify-between px-5 py-2 border-b border-primary/5 flex-shrink-0">
+    <div id="rds-day" class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest"></div>
+    <div id="rds-summary" class="text-[10px] font-label text-primary"></div>
+  </div>
+  <!-- Scrollable content -->
+  <div class="flex-1 overflow-y-auto px-5 py-4" style="scrollbar-width:thin;scrollbar-color:rgba(63,255,139,0.15) transparent">
+    <!-- Timeline bar -->
+    <div class="relative h-7 bg-surface-container rounded-sm mb-1 overflow-hidden" id="rds-timeline"></div>
+    <!-- Time axis labels -->
+    <div class="flex justify-between text-[8px] font-label text-on-surface-variant mb-5 px-0.5">
+      <span>7AM</span><span>10AM</span><span>1PM</span><span>4PM</span><span>7PM</span><span>10PM</span>
+    </div>
+    <!-- Schedule list -->
+    <div id="rds-list" class="space-y-2"></div>
+  </div>
+</div>
+
+<!-- ═══ FIND ME A ROOM MODAL ═══ -->
+<div id="find-room-modal" class="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center hidden">
+  <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" onclick="closeFindRoom()"></div>
+  <div class="relative w-full sm:max-w-lg bg-[#080808] border border-primary/20 rounded-t-2xl sm:rounded-sm flex flex-col" style="max-height:88vh">
+    <!-- Handle (mobile) -->
+    <div class="flex justify-center pt-3 pb-1 sm:hidden flex-shrink-0">
+      <div class="w-10 h-1 bg-outline-variant/40 rounded-full"></div>
+    </div>
+    <!-- Header -->
+    <div class="flex items-center justify-between px-5 py-4 border-b border-primary/10 flex-shrink-0">
+      <div>
+        <div class="text-[9px] text-primary font-label tracking-[0.25em] uppercase mb-0.5">Right Now · Best Available</div>
+        <div class="text-xl font-headline font-black text-white">Find Me a Room</div>
+      </div>
+      <button onclick="closeFindRoom()" class="w-9 h-9 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <!-- Building filter chips -->
+    <div class="px-4 py-3 border-b border-primary/10 flex-shrink-0">
+      <div id="fr-building-chips" class="flex gap-2 overflow-x-auto pb-0.5" style="scrollbar-width:none"></div>
+    </div>
+    <!-- Results list -->
+    <div class="flex-1 overflow-y-auto p-4" style="scrollbar-width:thin;scrollbar-color:rgba(63,255,139,0.15) transparent">
+      <div id="fr-results" class="space-y-2"></div>
+    </div>
+    <!-- Footer -->
+    <div class="px-5 py-3 border-t border-primary/10 flex-shrink-0">
+      <button onclick="closeFindRoom();switchView('rooms')"
+              class="w-full py-2.5 text-[10px] font-bold text-primary border border-primary/20 rounded-sm uppercase tracking-widest hover:bg-primary/10 transition-all">
+        View All Rooms →
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- MOBILE FAB -->
+<button onclick="openFindRoom()"
+        class="fixed bottom-20 right-5 z-40 md:hidden flex items-center gap-2 pl-4 pr-5 py-3 bg-primary text-on-primary font-headline font-bold text-sm rounded-full shadow-[0_4px_24px_rgba(63,255,139,0.4)] hover:brightness-110 transition-all">
+  <span class="material-symbols-outlined text-lg">search</span>
+  Find Room
+</button>
+
+<!-- MOBILE BOTTOM NAV -->
+<nav class="fixed bottom-0 left-0 right-0 h-14 bg-[#0a0a0a]/98 backdrop-blur-md border-t border-primary/10 flex md:hidden z-50">
+  <button id="mob-nav-dashboard" onclick="switchView('dashboard')"
+          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
+    <span class="material-symbols-outlined" style="font-size:20px;color:#3fff8b">grid_view</span>
+    <span class="text-[9px] font-label tracking-wide" style="color:#3fff8b">Dashboard</span>
+  </button>
+  <button id="mob-nav-rooms" onclick="switchView('rooms')"
+          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
+    <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">meeting_room</span>
+    <span class="text-[9px] font-label tracking-wide" style="color:#adaaaa">Rooms</span>
+  </button>
+  <button id="mob-nav-map" onclick="switchView('map')"
+          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
+    <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">map</span>
+    <span class="text-[9px] font-label tracking-wide" style="color:#adaaaa">Map</span>
+  </button>
+  <button id="mob-nav-settings" onclick="switchView('settings')"
+          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
+    <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">settings</span>
+    <span class="text-[9px] font-label tracking-wide" style="color:#adaaaa">Settings</span>
+  </button>
+</nav>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/app.js"></script>
+</body></html>

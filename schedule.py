@@ -89,11 +89,12 @@ def _time_to_minutes(t):
     return t.hour * 60 + t.minute
 
 
-def get_empty_rooms(schedule, weekday, now, building=None):
+def get_empty_rooms(schedule, weekday, now, building=None, min_duration_mins=0):
     """
     Return all rooms currently empty as of (weekday, now).
     Each result: {"building", "room", "minutes_until_next"} (minutes is int or None).
     Sorted by building, then room. Optional building filter.
+    min_duration_mins: skip rooms whose next class starts sooner than this many minutes.
     """
     # Collect all unique rooms and their classes for today
     all_rooms = {}  # (building, room) -> [today's class entries]
@@ -124,6 +125,10 @@ def get_empty_rooms(schedule, weekday, now, building=None):
             minutes_until_next = _time_to_minutes(nxt["time_start"]) - now_min
         else:
             minutes_until_next = None
+
+        # Apply minimum duration filter
+        if min_duration_mins > 0 and minutes_until_next is not None and minutes_until_next < min_duration_mins:
+            continue
 
         results.append({"building": bldg, "room": room, "minutes_until_next": minutes_until_next})
 

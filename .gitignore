@@ -9,3 +9,9 @@ start.sh
 # Schedule data — not committed, regenerate via bookmarklet each semester
 *.csv
 *.xlsx
+
+# Logs — may contain local paths / stack traces
+*.log
+
+# Uploaded schedule (written at runtime by /api/upload-schedule)
+uploaded_schedule.csv
