@@ -429,7 +429,7 @@
           <span class="material-symbols-outlined text-primary">upload_file</span>
           <div>
             <h3 class="text-xs font-label uppercase tracking-[0.25em] text-on-surface">Upload New Schedule</h3>
-            <p class="text-[10px] text-on-surface-variant mt-0.5">CSV exported from Banner SSB — updates live immediately, no restart needed.</p>
+            <p class="text-[10px] text-on-surface-variant mt-0.5">CSV or Excel file exported from Banner SSB — updates live immediately, no restart needed.</p>
           </div>
         </div>
         <div class="p-6 space-y-5">
@@ -441,10 +441,10 @@
                ondragover="event.preventDefault();this.classList.add('border-primary','bg-primary/10')"
                ondragleave="this.classList.remove('border-primary','bg-primary/10')"
                ondrop="handleDrop(event)">
-            <span class="material-symbols-outlined text-4xl text-on-surface-variant/40 block mb-3">csv</span>
-            <div class="text-sm font-headline font-bold text-white mb-1">Drop CSV file here</div>
-            <div class="text-xs text-on-surface-variant">or click to browse</div>
-            <input id="csv-file-input" type="file" accept=".csv" class="hidden" onchange="handleFileSelect(this.files[0])"/>
+            <span class="material-symbols-outlined text-4xl text-on-surface-variant/40 block mb-3">upload_file</span>
+            <div class="text-sm font-headline font-bold text-white mb-1">Drop file here</div>
+            <div class="text-xs text-on-surface-variant">CSV or Excel (.xlsx) · or click to browse</div>
+            <input id="csv-file-input" type="file" accept=".csv,.xlsx" class="hidden" onchange="handleFileSelect(this.files[0])"/>
           </div>
 
           <!-- Selected file preview -->

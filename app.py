@@ -204,10 +204,11 @@ def create_app(schedule=None):
         f = request.files['file']
         if not f.filename:
             return jsonify({'error': 'Empty filename.'}), 400
-        if not f.filename.lower().endswith('.csv'):
-            return jsonify({'error': 'Only CSV files are accepted.'}), 400
+        if not f.filename.lower().endswith(('.csv', '.xlsx')):
+            return jsonify({'error': 'Only CSV or Excel (.xlsx) files are accepted.'}), 400
 
-        save_path = os.path.join(UPLOAD_FOLDER, 'uploaded_schedule.csv')
+        ext = '.xlsx' if f.filename.lower().endswith('.xlsx') else '.csv'
+        save_path = os.path.join(UPLOAD_FOLDER, f'uploaded_schedule{ext}')
         f.save(save_path)
 
         try:
