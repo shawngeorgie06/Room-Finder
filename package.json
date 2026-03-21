@@ -1,0 +1,6 @@
+{
+  "name": "njit-empty-rooms",
+  "scripts": {
+    "start": "python app.py"
+  }
+}

@@ -1,0 +1,116 @@
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --primary: #cc0000;
+  --text: #1a1a1a;
+  --text-muted: #666;
+  --border: #e0e0e0;
+  --badge-bg: #e8f5e9;
+  --badge-text: #2e7d32;
+  --soon-text: #f57f17;
+  --radius: 12px;
+  --shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+header {
+  background: var(--primary);
+  color: #fff;
+  padding: 20px 16px 16px;
+  text-align: center;
+}
+
+header h1 { font-size: 1.4rem; font-weight: 700; }
+
+.clock {
+  font-size: 1.1rem;
+  margin-top: 6px;
+  opacity: 0.9;
+  font-variant-numeric: tabular-nums;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.controls label { font-weight: 600; font-size: 0.9rem; white-space: nowrap; }
+
+.controls select {
+  flex: 1;
+  padding: 8px 32px 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 0.95rem;
+  color: var(--text);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23666' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  cursor: pointer;
+}
+
+.status { font-size: 0.82rem; color: var(--text-muted); margin-bottom: 12px; }
+
+.rooms { display: grid; grid-template-columns: 1fr; gap: 10px; }
+
+@media (min-width: 480px) { .rooms { grid-template-columns: 1fr 1fr; } }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.card-room { font-size: 1.15rem; font-weight: 700; }
+.card-building { font-size: 0.8rem; color: var(--text-muted); font-weight: 500; }
+
+.card-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  width: fit-content;
+  background: var(--badge-bg);
+  color: var(--badge-text);
+}
+
+.card-time { font-size: 0.85rem; color: var(--text-muted); }
+.card-time.soon { color: var(--soon-text); font-weight: 600; }
+
+.loading, .empty-state {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 40px 0;
+  grid-column: 1 / -1;
+}
+
+.error-state {
+  color: var(--primary);
+  text-align: center;
+  padding: 40px 0;
+  grid-column: 1 / -1;
+}
