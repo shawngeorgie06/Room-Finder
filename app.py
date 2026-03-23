@@ -1,13 +1,15 @@
 import os
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request
 from schedule import load_schedule, get_empty_rooms
 
 UPLOAD_FOLDER = os.path.dirname(__file__)
+EASTERN = ZoneInfo('America/New_York')
 
 def get_current_time():
-    """Returns (weekday_int, time_object). Separate function for testability."""
-    now = datetime.now()
+    """Returns (weekday_int, time_object) in Eastern time."""
+    now = datetime.now(EASTERN)
     return now.weekday(), now.time()
 
 
