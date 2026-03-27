@@ -116,6 +116,7 @@
         />
       </div>
       <div id="hdr-clock" class="text-xs font-bold text-primary tabular-nums hidden sm:block">--:--:--</div>
+      <div id="hdr-countdown" class="text-[9px] font-label text-on-surface-variant tabular-nums md:hidden">↻ <span id="hdr-countdown-secs">60</span>s</div>
       <div class="w-9 h-9 rounded-sm bg-surface-container border border-outline-variant/20 flex items-center justify-center">
         <span class="material-symbols-outlined text-on-surface-variant">person</span>
       </div>
@@ -150,9 +151,23 @@
   <div class="p-4 space-y-4 mt-auto">
     <div class="bg-surface-container/50 p-3 border border-outline-variant/10 rounded-sm">
       <div class="text-[10px] font-label text-on-surface-variant mb-2">System Status</div>
-      <div class="flex items-center gap-2">
-        <div class="w-2 h-2 rounded-full bg-primary animate-pulse"></div>
-        <span class="text-[11px] font-bold text-primary">Live · Auto-refresh</span>
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <div class="w-2 h-2 rounded-full bg-primary animate-pulse"></div>
+          <span class="text-[11px] font-bold text-primary">Live</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <svg width="20" height="20" viewBox="0 0 20 20" style="transform:rotate(-90deg)">
+            <circle cx="10" cy="10" r="8" fill="none" stroke="rgba(63,255,139,0.15)" stroke-width="2"/>
+            <circle id="refresh-ring" cx="10" cy="10" r="8" fill="none"
+              stroke="#3fff8b" stroke-width="2"
+              stroke-dasharray="50.27"
+              stroke-dashoffset="0"
+              style="transition:stroke-dashoffset 1s linear"
+            />
+          </svg>
+          <span id="refresh-countdown" class="text-[9px] font-label text-primary tabular-nums">Refresh in 60s</span>
+        </div>
       </div>
       <div id="sidebar-status" class="text-[9px] text-on-surface-variant mt-1 tracking-wider"></div>
     </div>

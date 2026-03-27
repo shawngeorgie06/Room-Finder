@@ -1046,19 +1046,45 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { closeRoomDetail(); closeFindRoom(); }
 });
 
+// ── Countdown ──────────────────────────────────────────────────────────────
+const REFRESH_INTERVAL_MS = 60_000;
+let nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
+
+function updateCountdown() {
+  const secsLeft = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
+  const el = $('refresh-countdown');
+  if (el) el.textContent = `Refresh in ${secsLeft}s`;
+  const hdrSecs = $('hdr-countdown-secs');
+  if (hdrSecs) hdrSecs.textContent = secsLeft;
+  const ring = $('refresh-ring');
+  if (ring) {
+    const circ = 2 * Math.PI * 8; // r=8 → ~50.27
+    const pct  = secsLeft / (REFRESH_INTERVAL_MS / 1000);
+    ring.style.strokeDashoffset = circ * (1 - pct);
+  }
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────
 async function refresh() {
   await Promise.all([fetchBuildings(), fetchRooms()]);
   fetchAllRoomsCache();
 }
 
+async function scheduledRefresh() {
+  await refresh();
+  nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
+}
+
 async function init() {
   updateClock();
   setInterval(updateClock, 1000);
+  setInterval(updateCountdown, 1000);
   restoreStateFromURL();
   await refresh();
+  nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
+  updateCountdown();
   initDashMap(); // init dashboard map after data is loaded
-  setInterval(refresh, 60_000);
+  setInterval(scheduledRefresh, REFRESH_INTERVAL_MS);
 }
 
 init();
