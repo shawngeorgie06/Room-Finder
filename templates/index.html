@@ -128,7 +128,7 @@
 <aside class="fixed left-0 top-16 h-[calc(100vh-64px)] w-64 hidden md:flex flex-col pt-4 bg-[#080808] border-r border-primary/5 z-40">
   <div class="px-6 mb-8">
     <div class="text-sm font-black text-[#00E676] font-headline tracking-widest">NJIT Room Finder</div>
-    <div class="text-[10px] text-on-surface-variant font-label tracking-[0.2em] mt-1 opacity-50 uppercase">Spring 2026 · Live</div>
+    <div id="sidebar-semester" class="text-[10px] text-on-surface-variant font-label tracking-[0.2em] mt-1 opacity-50 uppercase">Live</div>
   </div>
   <nav class="flex-1 px-3 space-y-1">
     <a id="nav-dashboard" href="#" onclick="switchView('dashboard');return false;"
@@ -181,12 +181,21 @@
   <div id="view-dashboard" class="px-8 kinetic-grid min-h-screen">
     <div class="max-w-[1600px] mx-auto space-y-8">
 
+      <!-- No-classes banner (weekend / holiday) -->
+      <div id="dash-no-classes-banner" class="hidden mt-6 px-4 py-3 bg-surface-container border border-outline-variant/20 rounded-sm flex items-center gap-3">
+        <span class="material-symbols-outlined text-on-surface-variant text-xl">event_busy</span>
+        <div>
+          <div class="text-xs font-headline font-bold text-white">No classes scheduled today</div>
+          <div class="text-[10px] text-on-surface-variant font-label mt-0.5">All rooms are available — use the day filter to preview a weekday.</div>
+        </div>
+      </div>
+
       <!-- Page Header -->
       <div class="flex flex-col xl:flex-row xl:items-end justify-between gap-6 border-b border-outline-variant/10 pb-6">
         <div>
           <div class="flex items-center gap-3 mb-1">
             <span class="px-2 py-0.5 bg-primary/20 text-primary text-[10px] font-bold border border-primary/30 tracking-[0.2em]">LIVE</span>
-            <span class="text-on-surface-variant font-label text-xs uppercase tracking-[0.1em]">Spring 2026 · Auto-refresh 60s</span>
+            <span id="dash-semester" class="text-on-surface-variant font-label text-xs uppercase tracking-[0.1em]">Auto-refresh 60s</span>
           </div>
           <h1 class="text-5xl font-headline font-extrabold tracking-tighter text-white">Campus Overview</h1>
           <button onclick="openFindRoom()"
@@ -358,6 +367,18 @@
       <!-- Time Filter -->
       <div class="flex flex-wrap items-center gap-3 mb-4 px-4 py-3 glass-card border border-primary/10 rounded-sm">
         <span class="material-symbols-outlined text-primary" style="font-size:18px">schedule</span>
+        <select id="day-filter"
+                onchange="applyTimeFilter()"
+                class="bg-[#0e0e0e] border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">
+          <option value="">Today</option>
+          <option value="Monday">Monday</option>
+          <option value="Tuesday">Tuesday</option>
+          <option value="Wednesday">Wednesday</option>
+          <option value="Thursday">Thursday</option>
+          <option value="Friday">Friday</option>
+          <option value="Saturday">Saturday</option>
+          <option value="Sunday">Sunday</option>
+        </select>
         <span class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap">Free at</span>
         <input type="time" id="time-filter-at"
                class="bg-transparent border border-outline-variant/30 text-primary text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none"
@@ -405,10 +426,25 @@
           <span class="material-symbols-outlined" style="font-size:14px">link</span>
           <span id="copy-link-label">Share</span>
         </button>
+        <button id="free-all-day-btn"
+                onclick="toggleFreeAllDay()"
+                class="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold font-label uppercase tracking-widest border border-outline-variant/30 text-on-surface-variant rounded-sm hover:border-primary/40 hover:text-primary transition-all">
+          <span class="material-symbols-outlined" style="font-size:14px">all_day</span>
+          Free All Day
+        </button>
         <span id="time-filter-indicator"
               class="hidden px-2 py-0.5 bg-tertiary/20 border border-tertiary/30 text-tertiary text-[9px] font-bold font-label tracking-wider rounded-sm">
           CUSTOM TIME ACTIVE
         </span>
+      </div>
+
+      <!-- No-classes-today banner -->
+      <div id="no-classes-banner" class="hidden mb-4 px-4 py-3 bg-surface-container border border-outline-variant/20 rounded-sm flex items-center gap-3">
+        <span class="material-symbols-outlined text-on-surface-variant text-xl">event_busy</span>
+        <div>
+          <div class="text-xs font-headline font-bold text-white">No classes scheduled today</div>
+          <div class="text-[10px] text-on-surface-variant font-label mt-0.5">All rooms shown as available — use the day filter to check a weekday.</div>
+        </div>
       </div>
 
       <div id="building-filter" class="flex gap-2 overflow-x-auto pb-3 mb-6" style="scrollbar-width:none"></div>
@@ -555,7 +591,7 @@
 <footer class="fixed bottom-0 md:left-64 left-0 right-0 h-10 bg-[#0e0e0e] border-t border-primary/20 hidden md:flex items-center justify-between px-8 z-40 backdrop-blur-xl">
   <div class="flex items-center gap-8 text-[9px] font-label text-on-surface-variant tracking-[0.2em] uppercase">
     <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-primary shadow-[0_0_5px_#3fff8b]"></span><span>Schedule Loaded</span></div>
-    <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-primary"></span><span>Spring 2026</span></div>
+    <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-primary"></span><span id="footer-semester">–</span></div>
     <div class="flex items-center gap-2"><span class="text-outline">Last sync:</span><span id="footer-sync" class="text-primary">--:--</span></div>
   </div>
   <div class="text-[9px] font-label text-primary font-bold tracking-widest uppercase italic">NJIT Room Finder · Live</div>

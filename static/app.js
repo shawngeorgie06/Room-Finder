@@ -26,6 +26,8 @@ const state = {
   building: '',
   timeAt: '',      // custom time for filter (HH:MM string, empty = now)
   timeFor: 0,      // minimum free duration in minutes (0 = any)
+  dayAt: '',       // day override ('Monday'…'Sunday', empty = today)
+  freeAllDay: false, // show only rooms free for rest of day
   soonThresholdMins: 30,  // configurable "busy soon" threshold in minutes
   map: null,       // full-screen map view instance
   dashMap: null,   // dashboard embedded map instance
@@ -45,6 +47,8 @@ function syncURL() {
   if (state.building) params.set('building', state.building);
   if (state.timeAt)   params.set('at', state.timeAt);
   if (state.timeFor)  params.set('for', String(state.timeFor));
+  if (state.dayAt)    params.set('day', state.dayAt);
+  if (state.freeAllDay) params.set('freeAllDay', '1');
   if (state.soonThresholdMins !== 30) params.set('soon', String(state.soonThresholdMins));
   const newURL = params.toString() ? '?' + params.toString() : window.location.pathname;
   window.history.replaceState(null, '', newURL);
@@ -57,10 +61,14 @@ function restoreStateFromURL() {
   const building = params.get('building');
   const at       = params.get('at');
   const forMins  = params.get('for');
+  const day      = params.get('day');
+  const fad      = params.get('freeAllDay');
 
   if (building) state.building = building;
   if (at)       state.timeAt   = at;
   if (forMins)  state.timeFor  = parseInt(forMins) || 0;
+  if (day)    { state.dayAt = day; const sel = $('day-filter'); if (sel) sel.value = day; }
+  if (fad)    { state.freeAllDay = true; _updateFreeAllDayBtn(true); }
 
   const soon = params.get('soon');
   if (soon) {
@@ -72,7 +80,7 @@ function restoreStateFromURL() {
   // Restore time filter inputs so UI reflects the state
   if (at && $('time-filter-at'))        $('time-filter-at').value  = at;
   if (forMins && $('time-filter-for'))  $('time-filter-for').value = forMins;
-  if ((at || forMins) && $('time-filter-indicator')) {
+  if ((at || forMins || day) && $('time-filter-indicator')) {
     $('time-filter-indicator').classList.remove('hidden');
   }
 
@@ -159,6 +167,7 @@ async function fetchBuildings() {
     const params = [];
     if (state.timeAt)  params.push(`at=${encodeURIComponent(state.timeAt)}`);
     if (state.timeFor) params.push(`for=${state.timeFor}`);
+    if (state.dayAt)   params.push(`day=${encodeURIComponent(state.dayAt)}`);
     const url = '/api/buildings' + (params.length ? '?' + params.join('&') : '');
     const r = await fetch(url);
     if (!r.ok) throw new Error(r.status);
@@ -170,6 +179,13 @@ async function fetchBuildings() {
     renderDashBuildingFilter(data);
     if (state.map)     updateBuildingMarkers(state.map,     state.markers,     data);
     if (state.dashMap) updateBuildingMarkers(state.dashMap, state.dashMarkers, data);
+    // Show no-classes banner if all buildings have 0 occupied rooms and no day override
+    const totalOccupied = data.reduce((s, b) => s + b.occupied_rooms, 0);
+    const isWeekendOrHoliday = !state.dayAt && totalOccupied === 0 && data.length > 0;
+    ['no-classes-banner', 'dash-no-classes-banner'].forEach(id => {
+      const el = $(id);
+      if (el) el.classList.toggle('hidden', !isWeekendOrHoliday);
+    });
   } catch(e) { console.error('Buildings error:', e); }
 }
 
@@ -187,13 +203,16 @@ async function fetchRooms() {
   if (state.building) params.push(`building=${encodeURIComponent(state.building)}`);
   if (state.timeAt)   params.push(`at=${encodeURIComponent(state.timeAt)}`);
   if (state.timeFor)  params.push(`for=${state.timeFor}`);
+  if (state.dayAt)    params.push(`day=${encodeURIComponent(state.dayAt)}`);
   const url = '/api/rooms' + (params.length ? '?' + params.join('&') : '');
   try {
     const r = await fetch(url);
     if (!r.ok) throw new Error(r.status);
-    const data = await r.json();
+    let data = await r.json();
     // Cache unfiltered rooms for Find Me a Room
-    if (!state.building && !state.timeAt && !state.timeFor) state.allRoomsData = data;
+    if (!state.building && !state.timeAt && !state.timeFor && !state.dayAt) state.allRoomsData = data;
+    // Free all day filter
+    if (state.freeAllDay) data = data.filter(r => r.minutes_until_next === null);
     renderLiveFeed(data);
     renderDashRooms(data);
     renderRoomsTable(data);
@@ -228,10 +247,11 @@ function updateStats(buildings) {
 function applyTimeFilter() {
   state.timeAt  = $('time-filter-at')?.value  || '';
   state.timeFor = parseInt($('time-filter-for')?.value || '0');
+  state.dayAt   = $('day-filter')?.value || '';
   const sel = $('soon-threshold-select');
   if (sel) state.soonThresholdMins = parseInt(sel.value) || 30;
   const ind = $('time-filter-indicator');
-  if (ind) ind.classList.toggle('hidden', !state.timeAt && !state.timeFor);
+  if (ind) ind.classList.toggle('hidden', !state.timeAt && !state.timeFor && !state.dayAt);
   refresh();
   syncURL();
 }
@@ -239,8 +259,10 @@ function applyTimeFilter() {
 function resetTimeFilter() {
   state.timeAt  = '';
   state.timeFor = 0;
+  state.dayAt   = '';
   if ($('time-filter-at'))  $('time-filter-at').value  = '';
   if ($('time-filter-for')) $('time-filter-for').value = '0';
+  if ($('day-filter'))      $('day-filter').value      = '';
   const ind = $('time-filter-indicator');
   if (ind) ind.classList.add('hidden');
   refresh();
@@ -1041,9 +1063,43 @@ function renderFindRoom(rooms) {
   res.appendChild(frag);
 }
 
-// Close overlays on Escape
+// ── Free All Day filter ────────────────────────────────────────────────────
+function _updateFreeAllDayBtn(active) {
+  const btn = $('free-all-day-btn');
+  if (!btn) return;
+  btn.style.borderColor  = active ? '#3fff8b' : '';
+  btn.style.color        = active ? '#3fff8b' : '';
+  btn.style.background   = active ? 'rgba(63,255,139,0.08)' : '';
+}
+
+function toggleFreeAllDay() {
+  state.freeAllDay = !state.freeAllDay;
+  _updateFreeAllDayBtn(state.freeAllDay);
+  fetchRooms();
+  syncURL();
+}
+
+// ── Semester label ─────────────────────────────────────────────────────────
+async function fetchSemesterLabel() {
+  try {
+    const r = await fetch('/api/schedule-info');
+    if (!r.ok) return;
+    const d = await r.json();
+    const label = d.semester ? `${d.semester} · Live` : 'Live';
+    setText('sidebar-semester', label);
+    setText('dash-semester',    d.semester ? `${d.semester} · Auto-refresh 60s` : 'Auto-refresh 60s');
+    setText('footer-semester',  d.semester || '–');
+  } catch(e) { /* non-critical */ }
+}
+
+// Close overlays on Escape; press / to focus search
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { closeRoomDetail(); closeFindRoom(); }
+  if (e.key === '/' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
+    e.preventDefault();
+    const search = $('global-search');
+    if (search) { search.focus(); switchView('rooms'); }
+  }
 });
 
 // ── Countdown ──────────────────────────────────────────────────────────────
@@ -1084,6 +1140,7 @@ async function init() {
   nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
   updateCountdown();
   initDashMap(); // init dashboard map after data is loaded
+  fetchSemesterLabel();
   setInterval(scheduledRefresh, REFRESH_INTERVAL_MS);
 }
 

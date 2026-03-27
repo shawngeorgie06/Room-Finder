@@ -7,6 +7,39 @@ from schedule import load_schedule, get_empty_rooms
 UPLOAD_FOLDER = os.path.dirname(__file__)
 EASTERN = ZoneInfo('America/New_York')
 
+DAY_NAMES = {
+    'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+    'friday': 4, 'saturday': 5, 'sunday': 6,
+}
+SEMESTER_CODES = {'10': 'Spring', '50': 'Summer', '90': 'Fall', '30': 'Fall'}
+
+
+def parse_day_param(day_str):
+    """Parse 'Monday' or '0'–'6' to weekday int. Returns None if absent/invalid."""
+    if not day_str:
+        return None
+    s = day_str.strip().lower()
+    if s in DAY_NAMES:
+        return DAY_NAMES[s]
+    try:
+        d = int(s)
+        if 0 <= d <= 6:
+            return d
+    except ValueError:
+        pass
+    return None
+
+
+def _parse_semester(filename):
+    """Return e.g. 'Spring 2026' from 'Course_Schedule_202610.csv', or None."""
+    import re
+    m = re.search(r'(\d{4})(\d{2})', filename or '')
+    if not m:
+        return None
+    year, code = m.group(1), m.group(2)
+    season = SEMESTER_CODES.get(code, f'Term {code}')
+    return f'{season} {year}'
+
 def get_current_time():
     """Returns (weekday_int, time_object) in Eastern time."""
     now = datetime.now(EASTERN)
@@ -75,8 +108,9 @@ def create_app(schedule=None):
     meta = {'filename': '', 'loaded_at': None}
 
     if schedule is None:
-        # Try default bundled schedule first, then fall back to local dev file
-        for candidate in ['schedule_default.csv', 'Course_Schedule_202610.csv']:
+        # Prefer a previously uploaded schedule, then bundled default
+        for candidate in ['uploaded_schedule.xlsx', 'uploaded_schedule.csv',
+                          'schedule_default.csv', 'Course_Schedule_202610.csv']:
             csv_path = os.path.join(UPLOAD_FOLDER, candidate)
             if os.path.exists(csv_path):
                 schedule = load_schedule(csv_path)
@@ -98,6 +132,9 @@ def create_app(schedule=None):
         at_time = parse_at_param(request.args.get("at"))
         if at_time:
             now = at_time
+        day_override = parse_day_param(request.args.get("day"))
+        if day_override is not None:
+            weekday = day_override
         for_mins = int(request.args.get("for", 0) or 0)
         building = request.args.get("building") or None
         result = get_empty_rooms(schedule, weekday=weekday, now=now, building=building, min_duration_mins=for_mins)
@@ -109,6 +146,9 @@ def create_app(schedule=None):
         at_time = parse_at_param(request.args.get("at"))
         if at_time:
             now = at_time
+        day_override = parse_day_param(request.args.get("day"))
+        if day_override is not None:
+            weekday = day_override
         for_mins = int(request.args.get("for", 0) or 0)
         empty_rooms = get_empty_rooms(schedule, weekday=weekday, now=now, min_duration_mins=for_mins)
 
@@ -145,6 +185,9 @@ def create_app(schedule=None):
         at_time = parse_at_param(request.args.get("at"))
         if at_time:
             now = at_time
+        day_override = parse_day_param(request.args.get("day"))
+        if day_override is not None:
+            weekday = day_override
         for_mins = int(request.args.get("for", 0) or 0)
         building_filter = request.args.get("building") or None
 
@@ -250,12 +293,16 @@ def create_app(schedule=None):
     def schedule_info():
         buildings = set(e['building'] for e in schedule)
         rooms = set((e['building'], e['room']) for e in schedule)
+        weekday, _ = get_current_time()
+        has_classes_today = any(weekday in e['days'] for e in schedule)
         return jsonify({
             'filename': meta['filename'],
             'loaded_at': meta['loaded_at'],
             'entries': len(schedule),
             'buildings': len(buildings),
             'rooms': len(rooms),
+            'semester': _parse_semester(meta['filename']),
+            'has_classes_today': has_classes_today,
         })
 
     @app.route("/api/upload-schedule", methods=["POST"])
