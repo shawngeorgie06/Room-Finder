@@ -26,15 +26,75 @@ const state = {
   building: '',
   timeAt: '',      // custom time for filter (HH:MM string, empty = now)
   timeFor: 0,      // minimum free duration in minutes (0 = any)
+  soonThresholdMins: 30,  // configurable "busy soon" threshold in minutes
   map: null,       // full-screen map view instance
   dashMap: null,   // dashboard embedded map instance
   markers: {},
   dashMarkers: {},
   buildingsData: [],
   allRoomsData: [], // unfiltered rooms cache for Find Me a Room
+  allRoomsCache: [],   // full roster including occupied rooms
   mapFloor: 1,
   floorRoomsData: [],
 };
+
+// ── URL state sync ─────────────────────────────────────────────────────────
+function syncURL() {
+  const params = new URLSearchParams();
+  if (state.view && state.view !== 'dashboard') params.set('view', state.view);
+  if (state.building) params.set('building', state.building);
+  if (state.timeAt)   params.set('at', state.timeAt);
+  if (state.timeFor)  params.set('for', String(state.timeFor));
+  if (state.soonThresholdMins !== 30) params.set('soon', String(state.soonThresholdMins));
+  const newURL = params.toString() ? '?' + params.toString() : window.location.pathname;
+  window.history.replaceState(null, '', newURL);
+}
+
+function restoreStateFromURL() {
+  const params = new URLSearchParams(window.location.search);
+
+  const view     = params.get('view');
+  const building = params.get('building');
+  const at       = params.get('at');
+  const forMins  = params.get('for');
+
+  if (building) state.building = building;
+  if (at)       state.timeAt   = at;
+  if (forMins)  state.timeFor  = parseInt(forMins) || 0;
+
+  const soon = params.get('soon');
+  if (soon) {
+    state.soonThresholdMins = parseInt(soon) || 30;
+    const sel = $('soon-threshold-select');
+    if (sel) sel.value = String(state.soonThresholdMins);
+  }
+
+  // Restore time filter inputs so UI reflects the state
+  if (at && $('time-filter-at'))        $('time-filter-at').value  = at;
+  if (forMins && $('time-filter-for'))  $('time-filter-for').value = forMins;
+  if ((at || forMins) && $('time-filter-indicator')) {
+    $('time-filter-indicator').classList.remove('hidden');
+  }
+
+  // Switch to the saved view (must happen after DOM is ready)
+  if (view && ['dashboard','rooms','map','settings'].includes(view)) {
+    switchView(view);
+  }
+}
+
+function copyShareLink() {
+  const url = window.location.href;
+  navigator.clipboard.writeText(url).then(() => {
+    const label = $('copy-link-label');
+    if (label) {
+      label.textContent = 'Copied!';
+      setTimeout(() => { label.textContent = 'Share'; }, 2000);
+    }
+  }).catch(() => {
+    // Fallback: select and prompt manual copy
+    prompt('Copy this link:', url);
+  });
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function $(id) { return document.getElementById(id); }
@@ -90,6 +150,7 @@ function switchView(view) {
   if (view === 'map')       initMap();
   if (view === 'dashboard') initDashMap();
   if (view === 'settings')  fetchScheduleInfo();
+  syncURL();
 }
 
 // ── Fetch data ─────────────────────────────────────────────────────────────
@@ -110,6 +171,15 @@ async function fetchBuildings() {
     if (state.map)     updateBuildingMarkers(state.map,     state.markers,     data);
     if (state.dashMap) updateBuildingMarkers(state.dashMap, state.dashMarkers, data);
   } catch(e) { console.error('Buildings error:', e); }
+}
+
+async function fetchAllRoomsCache() {
+  if (state.allRoomsCache.length) return; // already loaded
+  try {
+    const r = await fetch('/api/rooms/all');
+    if (!r.ok) throw new Error(r.status);
+    state.allRoomsCache = await r.json();
+  } catch(e) { console.error('allRoomsCache error:', e); }
 }
 
 async function fetchRooms() {
@@ -158,9 +228,12 @@ function updateStats(buildings) {
 function applyTimeFilter() {
   state.timeAt  = $('time-filter-at')?.value  || '';
   state.timeFor = parseInt($('time-filter-for')?.value || '0');
+  const sel = $('soon-threshold-select');
+  if (sel) state.soonThresholdMins = parseInt(sel.value) || 30;
   const ind = $('time-filter-indicator');
   if (ind) ind.classList.toggle('hidden', !state.timeAt && !state.timeFor);
   refresh();
+  syncURL();
 }
 
 function resetTimeFilter() {
@@ -171,6 +244,62 @@ function resetTimeFilter() {
   const ind = $('time-filter-indicator');
   if (ind) ind.classList.add('hidden');
   refresh();
+  syncURL();
+}
+
+function applyThreshold() {
+  const sel = $('soon-threshold-select');
+  if (sel) state.soonThresholdMins = parseInt(sel.value) || 30;
+  // Re-render with existing data (no new fetch needed — threshold is display-only)
+  if (state.allRoomsData.length)    renderLiveFeed(state.allRoomsData);
+  if (state.buildingsData.length)   renderHealthBars(state.buildingsData);
+  // Re-fetch rooms so renderRoomsGrid and renderDashRooms get fresh calls
+  fetchRooms();
+  syncURL();
+}
+
+// ── Global search ──────────────────────────────────────────────────────────
+function globalSearch(query) {
+  const q = query.trim().toLowerCase();
+  if (!q) {
+    // Clear search: restore normal rooms view
+    state.building = '';
+    fetchRooms();
+    return;
+  }
+
+  // Switch to rooms view so results are visible
+  switchView('rooms');
+
+  const source = state.allRoomsCache.length ? state.allRoomsCache : state.allRoomsData;
+  const matches = source.filter(room => {
+    const full = `${room.building} ${room.room}`.toLowerCase();
+    const roomOnly = room.room.toLowerCase();
+    return full.includes(q) || roomOnly.includes(q);
+  });
+
+  // Only show empty rooms in search results (consistent with rooms view)
+  const emptyMatches = matches.filter(r => r.empty !== false);
+
+  setText('grid-count', `${emptyMatches.length} rooms match "${query}"`);
+  renderRoomsGrid(emptyMatches);
+
+  // Close mobile overlay if open
+  const overlay = $('mobile-search-overlay');
+  if (overlay && !overlay.classList.contains('hidden') && !q) {
+    overlay.classList.add('hidden');
+  }
+}
+
+function toggleMobileSearch() {
+  const overlay = $('mobile-search-overlay');
+  if (!overlay) return;
+  const isHidden = overlay.classList.contains('hidden');
+  overlay.classList.toggle('hidden', !isHidden);
+  if (isHidden) {
+    const inp = $('mobile-search-input');
+    if (inp) { inp.value = ''; inp.focus(); }
+  }
 }
 
 // ── Health bars ────────────────────────────────────────────────────────────
@@ -198,7 +327,7 @@ function renderLiveFeed(rooms) {
   container.textContent = '';
   const t = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
   rooms.slice(0, 10).forEach(room => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= 30;
+    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
     const color = isSoon ? '#f59e0b' : '#3fff8b';
     const label = isSoon ? 'Closing soon' : 'Available';
     const item = document.createElement('div');
@@ -222,7 +351,7 @@ function renderDashRooms(rooms) {
   if (!container) return;
   container.textContent = '';
   rooms.slice(0, 12).forEach(room => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= 30;
+    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
     const color = isSoon ? '#f59e0b' : '#3fff8b';
     const cell = document.createElement('div');
     cell.style.cssText = `background:${color}10;border:1px solid ${color}30;padding:8px;border-radius:2px;cursor:pointer;transition:background 0.15s`;
@@ -245,7 +374,7 @@ function renderRoomsTable(rooms) {
   setText('table-count', rooms.length);
   tbody.textContent = '';
   rooms.slice(0, 15).forEach(room => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= 30;
+    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
     const color = isSoon ? '#f59e0b' : '#3fff8b';
     const tr = document.createElement('tr');
     tr.className = 'hover:bg-primary/5 transition-colors';
@@ -292,7 +421,7 @@ function renderRoomsGrid(rooms) {
 
   const frag = document.createDocumentFragment();
   rooms.forEach((room, i) => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= 30;
+    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
     const color = isSoon ? '#f59e0b' : '#3fff8b';
     const border = isSoon ? 'rgba(245,158,11,0.2)' : 'rgba(63,255,139,0.1)';
     const card = document.createElement('div');
@@ -328,7 +457,14 @@ function renderBuildingChips(buildings) {
     const active = state.building === value;
     btn.style.cssText = `flex-shrink:0;padding:6px 14px;font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:700;border-radius:2px;text-transform:uppercase;letter-spacing:0.1em;transition:all 0.15s;cursor:pointer;border:1px solid ${active?'#3fff8b':'rgba(255,255,255,0.08)'};background:${active?'#3fff8b':'transparent'};color:${active?'#005d2c':'#adaaaa'}`;
     btn.textContent = label;
-    btn.addEventListener('click', () => { state.building = value; renderBuildingChips(buildings); fetchRooms(); });
+    btn.addEventListener('click', () => {
+      state.building = value;
+      const gs = $('global-search');
+      if (gs) gs.value = '';
+      renderBuildingChips(buildings);
+      fetchRooms();
+      syncURL();
+    });
     return btn;
   };
   container.appendChild(makeChip('ALL', ''));
@@ -514,7 +650,7 @@ function renderRoomGrid(rooms, floor, query = '') {
 
   const frag = document.createDocumentFragment();
   list.forEach(room => {
-    const isSoon = room.empty && room.minutes_until_next !== null && room.minutes_until_next <= 30;
+    const isSoon = room.empty && room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
     const color  = !room.empty ? '#ff7166' : isSoon ? '#f59e0b' : '#3fff8b';
     const status = !room.empty ? 'In Use'
                  : room.minutes_until_next === null ? 'Free all day'
@@ -694,6 +830,8 @@ function closeRoomDetail() {
   const backdrop = $('room-detail-backdrop');
   if (sheet)    sheet.style.transform = 'translateY(100%)';
   if (backdrop) backdrop.classList.add('hidden');
+  const fwEl = $('room-free-window');
+  if (fwEl) fwEl.classList.add('hidden');
 }
 
 function renderRoomDetail(data) {
@@ -751,6 +889,9 @@ function renderRoomDetail(data) {
       <div style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:700;color:#3fff8b">Free all day</div>
       <div style="font-family:'Space Grotesk',sans-serif;font-size:11px;color:#767575;margin-top:6px">No classes scheduled today</div>
     </div>`;
+    // Hide free window banner — room is free all day; large checkmark above is sufficient
+    const fwEl0 = $('room-free-window');
+    if (fwEl0) fwEl0.classList.add('hidden');
     return;
   }
 
@@ -795,6 +936,23 @@ function renderRoomDetail(data) {
     frag.appendChild(row);
   });
   list.appendChild(frag);
+
+  // Render next free window banner
+  const fwEl  = $('room-free-window');
+  const fwTxt = $('room-free-window-text');
+  if (fwEl && fwTxt) {
+    const fw = data.next_free_window;
+    if (fw) {
+      fwTxt.textContent = `${fw.start} \u2013 ${fw.end}  (${fw.duration_mins} min)`;
+      fwEl.style.background = '';
+      fwEl.classList.remove('hidden');
+    } else {
+      // Free rest of day
+      fwTxt.textContent = 'Free for the rest of the day';
+      fwEl.style.background = 'rgba(63,255,139,0.05)';
+      fwEl.classList.remove('hidden');
+    }
+  }
 }
 
 // ── Find Me a Room ───────────────────────────────────────────────────────────
@@ -861,7 +1019,7 @@ function renderFindRoom(rooms) {
 
   const frag = document.createDocumentFragment();
   sorted.slice(0, 12).forEach((room, i) => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= 30;
+    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
     const color  = isSoon ? '#f59e0b' : '#3fff8b';
     const row = document.createElement('div');
     row.style.cssText = `display:flex;align-items:center;gap:14px;padding:13px 14px;background:rgba(63,255,139,0.03);border:1px solid rgba(63,255,139,0.07);border-radius:2px;cursor:pointer;transition:background 0.15s`;
@@ -891,11 +1049,13 @@ document.addEventListener('keydown', e => {
 // ── Init ───────────────────────────────────────────────────────────────────
 async function refresh() {
   await Promise.all([fetchBuildings(), fetchRooms()]);
+  fetchAllRoomsCache();
 }
 
 async function init() {
   updateClock();
   setInterval(updateClock, 1000);
+  restoreStateFromURL();
   await refresh();
   initDashMap(); // init dashboard map after data is loaded
   setInterval(refresh, 60_000);

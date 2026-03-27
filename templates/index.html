@@ -103,7 +103,18 @@
       <span class="text-on-surface-variant">Empty Rooms: <span id="hdr-empty" class="text-primary">--</span></span>
       <span class="text-on-surface-variant">Occupancy: <span id="hdr-occ" class="text-tertiary">--%</span></span>
     </div>
-    <div class="flex items-center gap-3 pl-4 border-l border-outline-variant/30">
+    <div class="flex items-center gap-4 pl-4 border-l border-outline-variant/30">
+      <div class="relative hidden sm:block">
+        <span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-on-surface-variant" style="font-size:16px">search</span>
+        <input
+          id="global-search"
+          type="text"
+          placeholder="Search room..."
+          oninput="globalSearch(this.value)"
+          autocomplete="off"
+          class="bg-surface-container border border-outline-variant/30 text-white text-xs font-label pl-8 pr-3 py-1.5 rounded-sm w-40 focus:outline-none focus:border-primary/60 placeholder:text-on-surface-variant/40"
+        />
+      </div>
       <div id="hdr-clock" class="text-xs font-bold text-primary tabular-nums hidden sm:block">--:--:--</div>
       <div class="w-9 h-9 rounded-sm bg-surface-container border border-outline-variant/20 flex items-center justify-center">
         <span class="material-symbols-outlined text-on-surface-variant">person</span>
@@ -346,6 +357,22 @@
           <option value="120">2 hrs</option>
           <option value="180">3 hrs</option>
         </select>
+        <!-- Busy Soon threshold -->
+        <div class="flex items-center gap-2">
+          <label for="soon-threshold-select" class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap">
+            Closing soon if
+          </label>
+          <select
+            id="soon-threshold-select"
+            onchange="applyThreshold()"
+            class="bg-surface-container border border-outline-variant/30 text-white text-xs font-label px-2 py-1.5 rounded-sm focus:outline-none focus:border-primary/60"
+          >
+            <option value="15">≤ 15 min</option>
+            <option value="30" selected>≤ 30 min</option>
+            <option value="45">≤ 45 min</option>
+            <option value="60">≤ 60 min</option>
+          </select>
+        </div>
         <button onclick="applyTimeFilter()"
                 class="px-4 py-1.5 text-[10px] font-bold bg-primary/10 border border-primary/30 text-primary rounded-sm uppercase tracking-widest hover:bg-primary/20 transition-all">
           Apply
@@ -353,6 +380,15 @@
         <button onclick="resetTimeFilter()"
                 class="px-3 py-1.5 text-[10px] font-bold text-on-surface-variant border border-outline-variant/20 rounded-sm uppercase tracking-widest hover:text-white transition-all">
           Reset to Now
+        </button>
+        <button
+          onclick="copyShareLink()"
+          id="copy-link-btn"
+          title="Copy shareable link"
+          class="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold font-label uppercase tracking-widest border border-outline-variant/30 text-on-surface-variant rounded-sm hover:border-primary/40 hover:text-primary transition-all"
+        >
+          <span class="material-symbols-outlined" style="font-size:14px">link</span>
+          <span id="copy-link-label">Share</span>
         </button>
         <span id="time-filter-indicator"
               class="hidden px-2 py-0.5 bg-tertiary/20 border border-tertiary/30 text-tertiary text-[9px] font-bold font-label tracking-wider rounded-sm">
@@ -605,6 +641,14 @@
     <div class="flex justify-between text-[8px] font-label text-on-surface-variant mb-5 px-0.5">
       <span>7AM</span><span>10AM</span><span>1PM</span><span>4PM</span><span>7PM</span><span>10PM</span>
     </div>
+    <!-- Next free window banner -->
+    <div id="room-free-window" class="hidden mb-4 px-4 py-3 bg-primary/10 border border-primary/30 rounded-sm flex items-center gap-3">
+      <span class="material-symbols-outlined text-primary text-xl">schedule</span>
+      <div>
+        <div class="text-[9px] font-label text-on-surface-variant uppercase tracking-widest mb-0.5">Next Free Window</div>
+        <div id="room-free-window-text" class="text-sm font-headline font-bold text-primary"></div>
+      </div>
+    </div>
     <!-- Schedule list -->
     <div id="rds-list" class="space-y-2"></div>
   </div>
@@ -665,6 +709,10 @@
     <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">meeting_room</span>
     <span class="text-[9px] font-label tracking-wide" style="color:#adaaaa">Rooms</span>
   </button>
+  <button onclick="toggleMobileSearch()" class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
+    <span id="mob-search-icon" class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">search</span>
+    <span class="text-[9px] font-label tracking-wide" style="color:#adaaaa">Search</span>
+  </button>
   <button id="mob-nav-map" onclick="switchView('map')"
           class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
     <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">map</span>
@@ -676,6 +724,22 @@
     <span class="text-[9px] font-label tracking-wide" style="color:#adaaaa">Settings</span>
   </button>
 </nav>
+
+<!-- Mobile search overlay -->
+<div id="mobile-search-overlay" class="hidden fixed inset-0 z-[200] bg-[#080808]/95 backdrop-blur-md flex flex-col items-center pt-24 px-6 sm:hidden">
+  <div class="w-full max-w-sm relative">
+    <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" style="font-size:20px">search</span>
+    <input
+      id="mobile-search-input"
+      type="text"
+      placeholder="Search room (e.g. KUPF 207)..."
+      oninput="globalSearch(this.value)"
+      autocomplete="off"
+      class="w-full bg-surface-container border border-outline-variant/30 text-white text-sm font-label pl-10 pr-4 py-3 rounded-sm focus:outline-none focus:border-primary/60 placeholder:text-on-surface-variant/40"
+    />
+  </div>
+  <button onclick="toggleMobileSearch()" class="mt-6 text-xs text-on-surface-variant font-label uppercase tracking-widest">Cancel</button>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/static/app.js"></script>

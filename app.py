@@ -23,6 +23,51 @@ def parse_at_param(at_str):
         return None
 
 
+def _compute_next_free_window(classes_out, now_min):
+    """
+    Given a sorted list of class dicts (each with start_min, end_min, time_start, time_end)
+    and the current time in minutes, return the next free window as
+    {'start': 'HH:MM AM/PM', 'end': 'HH:MM AM/PM', 'duration_mins': int}
+    or None if free for the rest of the day.
+
+    A free window is a gap between consecutive classes, or the gap from now
+    until the first class (if room is currently free before class starts).
+    """
+    def mins_to_str(m):
+        h, mn = divmod(m, 60)
+        period = 'AM' if h < 12 else 'PM'
+        h12 = h % 12 or 12
+        return f"{h12}:{mn:02d} {period}"
+
+    if not classes_out:
+        # No classes today — free all day, no specific window
+        return None
+
+    # Case 1: before any class starts — free from now until first class
+    first_start = classes_out[0]['start_min']
+    if now_min < first_start:
+        dur = first_start - now_min
+        return {'start': mins_to_str(now_min), 'end': mins_to_str(first_start), 'duration_mins': dur}
+
+    # Case 2: find gap between consecutive classes after now
+    for i in range(len(classes_out) - 1):
+        gap_start = classes_out[i]['end_min']
+        gap_end   = classes_out[i + 1]['start_min']
+        if gap_start > now_min and gap_end > gap_start:
+            dur = gap_end - gap_start
+            return {'start': mins_to_str(gap_start), 'end': mins_to_str(gap_end), 'duration_mins': dur}
+        # If we're inside a class, look for gap after it ends
+        if classes_out[i]['start_min'] <= now_min < classes_out[i]['end_min']:
+            gap_start = classes_out[i]['end_min']
+            if i + 1 < len(classes_out):
+                gap_end = classes_out[i + 1]['start_min']
+                dur = gap_end - gap_start
+                return {'start': mins_to_str(gap_start), 'end': mins_to_str(gap_end), 'duration_mins': dur}
+
+    # Case 3: after all classes — free rest of day
+    return None
+
+
 def create_app(schedule=None):
     app = Flask(__name__)
 
@@ -149,6 +194,20 @@ def create_app(schedule=None):
             return jsonify({'error': 'building and room are required'}), 400
 
         weekday, now = get_current_time()
+
+        # Allow time override (used by frontend time-filter and tests)
+        at_time = parse_at_param(request.args.get("at"))
+        if at_time:
+            now = at_time
+
+        # Allow weekday override for testing only
+        _wd = request.args.get("_weekday")
+        if _wd is not None:
+            try:
+                weekday = int(_wd)
+            except ValueError:
+                pass
+
         now_min = now.hour * 60 + now.minute
 
         today_classes = sorted(
@@ -173,14 +232,18 @@ def create_app(schedule=None):
         next_cls = next((c for c in classes_out if c['start_min'] > now_min), None)
         weekday_names = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
 
+        # ── Compute next free window ──────────────────────────────────────────
+        next_free_window = _compute_next_free_window(classes_out, now_min)
+
         return jsonify({
-            'building':     building,
-            'room':         room_num,
-            'classes':      classes_out,
-            'now_min':      now_min,
-            'occupied_now': occupied_now,
-            'next_class':   next_cls,
-            'weekday':      weekday_names[weekday],
+            'building':          building,
+            'room':              room_num,
+            'classes':           classes_out,
+            'now_min':           now_min,
+            'occupied_now':      occupied_now,
+            'next_class':        next_cls,
+            'weekday':           weekday_names[weekday],
+            'next_free_window':  next_free_window,
         })
 
     @app.route("/api/schedule-info")
