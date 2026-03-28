@@ -182,6 +182,12 @@ async function fetchBuildings() {
     // Show no-classes banner if all buildings have 0 occupied rooms and no day override
     const totalOccupied = data.reduce((s, b) => s + b.occupied_rooms, 0);
     const isWeekendOrHoliday = !state.dayAt && totalOccupied === 0 && data.length > 0;
+    if (isWeekendOrHoliday) {
+      const dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+      ['no-classes-banner-day', 'dash-no-classes-banner-day'].forEach(id => {
+        const el = $(id); if (el) el.textContent = dayName;
+      });
+    }
     ['no-classes-banner', 'dash-no-classes-banner'].forEach(id => {
       const el = $(id);
       if (el) el.classList.toggle('hidden', !isWeekendOrHoliday);
@@ -228,13 +234,15 @@ async function fetchRooms() {
 function updateStats(buildings) {
   const totalRooms = buildings.reduce((s, b) => s + b.total_rooms, 0);
   const totalEmpty = buildings.reduce((s, b) => s + b.empty_rooms, 0);
-  const occ = totalRooms > 0 ? Math.round((totalRooms - totalEmpty) / totalRooms * 100) : 0;
+  const totalOccupied = totalRooms - totalEmpty;
+  const isNoClasses = !state.dayAt && totalOccupied === 0 && buildings.length > 0;
+  const occ = isNoClasses ? '—' : (totalRooms > 0 ? Math.round(totalOccupied / totalRooms * 100) + '%' : '0%');
   setText('stat-total', totalRooms);
-  setText('stat-empty', totalEmpty);
-  setText('stat-occ', occ + '%');
+  setText('stat-empty', isNoClasses ? 'All' : totalEmpty);
+  setText('stat-occ', occ);
   setText('stat-bldg', buildings.length);
-  setText('hdr-empty', totalEmpty);
-  setText('hdr-occ', occ + '%');
+  setText('hdr-empty', isNoClasses ? 'All' : totalEmpty);
+  setText('hdr-occ', occ);
   setText('health-sections', (totalRooms * 3).toLocaleString());
   setText('health-bldg', buildings.length);
   setText('health-occ', occ + '%');
@@ -268,6 +276,19 @@ function resetTimeFilter() {
   if (ind) ind.classList.add('hidden');
   refresh();
   syncURL();
+}
+
+function roomType(room) {
+  return String(room).toUpperCase().endsWith('L') ? 'LAB' : null;
+}
+
+function toggleFilterMore() {
+  const sec = $('filter-secondary');
+  const btn = $('filter-more-btn');
+  if (!sec) return;
+  const open = sec.style.display !== 'none';
+  sec.style.display = open ? 'none' : 'flex';
+  if (btn) btn.style.color = open ? '' : '#3fff8b';
 }
 
 function applyThreshold() {
@@ -512,9 +533,14 @@ function renderRoomsGrid(rooms) {
     card.addEventListener('mouseover', () => { card.style.borderColor = color + '50'; card.style.background = `linear-gradient(135deg,rgba(26,25,25,0.95),rgba(${color==='#3fff8b'?'14,40,24':'40,20,14'},0.95))`; });
     card.addEventListener('mouseout',  () => { card.style.borderColor = border; card.style.background = 'linear-gradient(135deg,rgba(26,25,25,0.8),rgba(14,14,14,0.95))'; });
     const capLabel = room.capacity ? `<span style="font-family:'Space Grotesk',sans-serif;font-size:8px;color:#484847;letter-spacing:0.1em">cap ${room.capacity}</span>` : '';
+    const type = roomType(room.room);
+    const typeLabel = type ? `<span style="font-family:'Space Grotesk',sans-serif;font-size:8px;font-weight:700;padding:1px 5px;background:rgba(110,155,255,0.12);border:1px solid rgba(110,155,255,0.25);color:#6e9bff;border-radius:2px;letter-spacing:0.08em">${type}</span>` : '';
     card.innerHTML = `
       <div style="position:absolute;top:0;left:0;right:0;height:2px;background:${color};opacity:0.6"></div>
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:600;color:#767575;letter-spacing:0.15em;text-transform:uppercase;margin-bottom:4px">${room.building}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:600;color:#767575;letter-spacing:0.15em;text-transform:uppercase">${room.building}</span>
+        ${typeLabel}
+      </div>
       <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:12px">
         <span style="font-family:'Space Grotesk',sans-serif;font-size:26px;font-weight:800;color:#fff;letter-spacing:0.05em">${room.room}</span>
         ${capLabel}

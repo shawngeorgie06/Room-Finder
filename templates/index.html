@@ -366,39 +366,57 @@
         <span id="grid-timestamp" class="text-[9px] text-on-surface-variant/40 font-label ml-3"></span>
       </div>
       <!-- Time Filter -->
-      <div class="flex items-center gap-3 mb-4 px-4 py-3 glass-card border border-primary/10 rounded-sm overflow-x-auto" style="-webkit-overflow-scrolling:touch;scrollbar-width:none">
-        <span class="material-symbols-outlined text-primary shrink-0" style="font-size:18px">schedule</span>
-        <select id="day-filter"
-                onchange="applyTimeFilter()"
-                class="shrink-0 bg-surface-container border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">
-          <option value="">Today</option>
-          <option value="Monday">Monday</option>
-          <option value="Tuesday">Tuesday</option>
-          <option value="Wednesday">Wednesday</option>
-          <option value="Thursday">Thursday</option>
-          <option value="Friday">Friday</option>
-          <option value="Saturday">Saturday</option>
-          <option value="Sunday">Sunday</option>
-        </select>
-        <span class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap shrink-0">Free at</span>
-        <input type="time" id="time-filter-at"
-               class="shrink-0 bg-transparent border border-outline-variant/30 text-primary text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none"
-               style="color-scheme:dark"/>
-        <span class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap shrink-0">for at least</span>
-        <select id="time-filter-for"
-                class="shrink-0 bg-surface-container border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">
-          <option value="0">Any duration</option>
-          <option value="30">30 min</option>
-          <option value="60">1 hour</option>
-          <option value="90">1.5 hrs</option>
-          <option value="120">2 hrs</option>
-          <option value="180">3 hrs</option>
-        </select>
-        <!-- Busy Soon threshold -->
-        <div class="flex items-center gap-2 shrink-0">
-          <label for="soon-threshold-select" class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap">
-            Closing soon if
-          </label>
+      <div class="mb-4 glass-card border border-primary/10 rounded-sm overflow-hidden">
+        <!-- Primary row -->
+        <div class="flex items-center gap-3 px-4 py-3 overflow-x-auto" style="-webkit-overflow-scrolling:touch;scrollbar-width:none">
+          <span class="material-symbols-outlined text-primary shrink-0" style="font-size:18px">schedule</span>
+          <select id="day-filter"
+                  onchange="applyTimeFilter()"
+                  class="shrink-0 bg-surface-container border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">
+            <option value="">Today</option>
+            <option value="Monday">Monday</option>
+            <option value="Tuesday">Tuesday</option>
+            <option value="Wednesday">Wednesday</option>
+            <option value="Thursday">Thursday</option>
+            <option value="Friday">Friday</option>
+            <option value="Saturday">Saturday</option>
+            <option value="Sunday">Sunday</option>
+          </select>
+          <span class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap shrink-0">Free at</span>
+          <input type="time" id="time-filter-at"
+                 class="shrink-0 bg-transparent border border-outline-variant/30 text-primary text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none"
+                 style="color-scheme:dark"/>
+          <span class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap shrink-0">for at least</span>
+          <select id="time-filter-for"
+                  class="shrink-0 bg-surface-container border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">
+            <option value="0">Any duration</option>
+            <option value="30">30 min</option>
+            <option value="60">1 hour</option>
+            <option value="90">1.5 hrs</option>
+            <option value="120">2 hrs</option>
+            <option value="180">3 hrs</option>
+          </select>
+          <button onclick="applyTimeFilter()"
+                  class="shrink-0 px-4 py-1.5 text-[10px] font-bold bg-primary/10 border border-primary/30 text-primary rounded-sm uppercase tracking-widest hover:bg-primary/20 transition-all">
+            Apply
+          </button>
+          <button onclick="resetTimeFilter()"
+                  class="shrink-0 px-3 py-1.5 text-[10px] font-bold text-on-surface-variant border border-outline-variant/20 rounded-sm uppercase tracking-widest hover:text-white transition-all">
+            Reset
+          </button>
+          <button onclick="toggleFilterMore()" id="filter-more-btn"
+                  class="shrink-0 flex items-center gap-1 px-3 py-1.5 text-[10px] font-bold font-label uppercase tracking-widest border border-outline-variant/20 text-on-surface-variant rounded-sm hover:text-white hover:border-outline-variant/50 transition-all ml-auto">
+            <span class="material-symbols-outlined" style="font-size:13px">tune</span>
+            Filters
+          </button>
+          <span id="time-filter-indicator"
+                class="hidden shrink-0 px-2 py-0.5 bg-tertiary/20 border border-tertiary/30 text-tertiary text-[9px] font-bold font-label tracking-wider rounded-sm">
+            CUSTOM TIME
+          </span>
+        </div>
+        <!-- Secondary row (hidden by default) -->
+        <div id="filter-secondary" style="display:none" class="flex flex-wrap items-center gap-3 px-4 py-3 border-t border-outline-variant/10">
+          <span class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap">Closing soon if</span>
           <select
             id="soon-threshold-select"
             onchange="applyThreshold()"
@@ -409,41 +427,28 @@
             <option value="45">≤ 45 min</option>
             <option value="60">≤ 60 min</option>
           </select>
+          <button
+            onclick="copyShareLink()"
+            id="copy-link-btn"
+            class="flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold font-label uppercase tracking-widest border border-outline-variant/30 text-on-surface-variant rounded-sm hover:border-primary/40 hover:text-primary transition-all"
+          >
+            <span class="material-symbols-outlined" style="font-size:14px">link</span>
+            <span id="copy-link-label">Share</span>
+          </button>
+          <button id="free-all-day-btn"
+                  onclick="toggleFreeAllDay()"
+                  class="whitespace-nowrap px-3 py-1.5 text-[10px] font-bold font-label uppercase tracking-widest border border-outline-variant/30 text-on-surface-variant rounded-sm hover:border-primary/40 hover:text-primary transition-all">
+            Free All Day
+          </button>
         </div>
-        <button onclick="applyTimeFilter()"
-                class="shrink-0 px-4 py-1.5 text-[10px] font-bold bg-primary/10 border border-primary/30 text-primary rounded-sm uppercase tracking-widest hover:bg-primary/20 transition-all">
-          Apply
-        </button>
-        <button onclick="resetTimeFilter()"
-                class="shrink-0 px-3 py-1.5 text-[10px] font-bold text-on-surface-variant border border-outline-variant/20 rounded-sm uppercase tracking-widest hover:text-white transition-all">
-          Reset to Now
-        </button>
-        <button
-          onclick="copyShareLink()"
-          id="copy-link-btn"
-          title="Copy shareable link"
-          class="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold font-label uppercase tracking-widest border border-outline-variant/30 text-on-surface-variant rounded-sm hover:border-primary/40 hover:text-primary transition-all"
-        >
-          <span class="material-symbols-outlined" style="font-size:14px">link</span>
-          <span id="copy-link-label">Share</span>
-        </button>
-        <button id="free-all-day-btn"
-                onclick="toggleFreeAllDay()"
-                class="shrink-0 whitespace-nowrap px-3 py-1.5 text-[10px] font-bold font-label uppercase tracking-widest border border-outline-variant/30 text-on-surface-variant rounded-sm hover:border-primary/40 hover:text-primary transition-all">
-          Free All Day
-        </button>
-        <span id="time-filter-indicator"
-              class="hidden shrink-0 px-2 py-0.5 bg-tertiary/20 border border-tertiary/30 text-tertiary text-[9px] font-bold font-label tracking-wider rounded-sm">
-          CUSTOM TIME ACTIVE
-        </span>
       </div>
 
       <!-- No-classes-today banner -->
       <div id="no-classes-banner" class="hidden mb-4 px-4 py-3 bg-surface-container border border-outline-variant/20 rounded-sm flex items-center gap-3">
         <span class="material-symbols-outlined text-on-surface-variant text-xl">event_busy</span>
         <div>
-          <div class="text-xs font-headline font-bold text-white">No classes scheduled today</div>
-          <div class="text-[10px] text-on-surface-variant font-label mt-0.5">All rooms shown as available — use the day filter to check a weekday.</div>
+          <div class="text-xs font-headline font-bold text-white">No classes scheduled — <span id="no-classes-banner-day">today</span></div>
+          <div class="text-[10px] text-on-surface-variant font-label mt-0.5">All rooms are available. Use the day filter above to check a weekday.</div>
         </div>
       </div>
 
