@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 from schedule import load_schedule, get_empty_rooms
 
 UPLOAD_FOLDER = os.path.dirname(__file__)
@@ -125,6 +125,13 @@ def create_app(schedule=None):
     @app.route("/")
     def index():
         return render_template("index.html")
+
+    @app.route("/bookmarklet")
+    def bookmarklet():
+        return send_from_directory(
+            os.path.join(os.path.dirname(__file__), 'bookmarklet'),
+            'install.html'
+        )
 
     @app.route("/api/rooms")
     def rooms():
