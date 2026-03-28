@@ -370,7 +370,7 @@
         <span class="material-symbols-outlined text-primary shrink-0" style="font-size:18px">schedule</span>
         <select id="day-filter"
                 onchange="applyTimeFilter()"
-                class="shrink-0 bg-[#0e0e0e] border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">
+                class="shrink-0 bg-surface-container border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">
           <option value="">Today</option>
           <option value="Monday">Monday</option>
           <option value="Tuesday">Tuesday</option>
@@ -386,7 +386,7 @@
                style="color-scheme:dark"/>
         <span class="text-[10px] font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap shrink-0">for at least</span>
         <select id="time-filter-for"
-                class="shrink-0 bg-[#0e0e0e] border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">
+                class="shrink-0 bg-surface-container border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">
           <option value="0">Any duration</option>
           <option value="30">30 min</option>
           <option value="60">1 hour</option>
@@ -429,8 +429,7 @@
         </button>
         <button id="free-all-day-btn"
                 onclick="toggleFreeAllDay()"
-                class="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-[10px] font-bold font-label uppercase tracking-widest border border-outline-variant/30 text-on-surface-variant rounded-sm hover:border-primary/40 hover:text-primary transition-all">
-          <span class="material-symbols-outlined" style="font-size:14px">all_day</span>
+                class="shrink-0 whitespace-nowrap px-3 py-1.5 text-[10px] font-bold font-label uppercase tracking-widest border border-outline-variant/30 text-on-surface-variant rounded-sm hover:border-primary/40 hover:text-primary transition-all">
           Free All Day
         </button>
         <span id="time-filter-indicator"
