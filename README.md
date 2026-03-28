@@ -31,9 +31,10 @@ Live at: [https://room-finder.onrender.com](https://room-finder.onrender.com) *(
 - Shareable URLs — filters sync to URL params, paste to share exact view
 - Auto-refresh every 60 seconds with countdown ring
 - Configurable "closing soon" threshold (15 / 30 / 45 / 60 min)
-- Skeleton loading cards while data fetches
+- "Best Rooms Right Now" — top rooms sorted by free time, on dashboard and sidebar
+- Mobile bottom nav with search overlay and room detail bottom sheet
 - Weekend / no-classes banner when campus is quiet
-- Semester label auto-detected from schedule filename
+- Semester label auto-detected from filename, falls back to current date
 
 ---
 
@@ -69,12 +70,12 @@ On first run the app loads `schedule_default.csv` from the project root. Upload 
 
 **Option 2 — Bookmarklet**
 
-1. Open `bookmarklet/install.html` in your browser
+1. Go to `/bookmarklet` in the app (linked from the Settings page)
 2. Drag the **Extract NJIT Schedule** button to your bookmarks bar
 3. Log in to [Banner Course Schedule](https://generalssb-prod.ec.njit.edu/BannerExtensibility/customPage/page/stuRegCrseSched)
 4. Select the current term, wait for the page to load
 5. Click the bookmarklet — downloads a combined CSV
-6. Upload via Settings page or place in project root as `schedule_default.csv`
+6. Upload via the Settings page — updates instantly, no restart needed
 
 ---
 
