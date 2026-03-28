@@ -224,7 +224,8 @@ def create_app(schedule=None):
                 'room': r,
                 'floor': floor,
                 'empty': is_empty,
-                'minutes_until_next': minutes
+                'minutes_until_next': minutes,
+                'capacity': empty_map.get((b, r), {}).get('capacity'),
             })
 
         return jsonify(result)
@@ -278,6 +279,13 @@ def create_app(schedule=None):
         # ── Compute next free window ──────────────────────────────────────────
         next_free_window = _compute_next_free_window(classes_out, now_min)
 
+        # ── Compute room capacity (max across all schedule entries for this room) ──
+        room_capacity = max(
+            (e.get('capacity') for e in schedule
+             if e['building'] == building and e['room'] == room_num and e.get('capacity')),
+            default=None,
+        )
+
         return jsonify({
             'building':          building,
             'room':              room_num,
@@ -287,6 +295,7 @@ def create_app(schedule=None):
             'next_class':        next_cls,
             'weekday':           weekday_names[weekday],
             'next_free_window':  next_free_window,
+            'capacity':          room_capacity,
         })
 
     @app.route("/api/schedule-info")

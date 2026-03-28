@@ -205,6 +205,7 @@ async function fetchRooms() {
   if (state.timeFor)  params.push(`for=${state.timeFor}`);
   if (state.dayAt)    params.push(`day=${encodeURIComponent(state.dayAt)}`);
   const url = '/api/rooms' + (params.length ? '?' + params.join('&') : '');
+  renderRoomsGridSkeleton();
   try {
     const r = await fetch(url);
     if (!r.ok) throw new Error(r.status);
@@ -381,10 +382,24 @@ function renderDashRooms(rooms) {
     cell.onclick = () => openRoomDetail(room.building, room.room);
     cell.onmouseover = () => { cell.style.background = `${color}20`; };
     cell.onmouseout  = () => { cell.style.background = `${color}10`; };
-    cell.innerHTML = `
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:800;color:${color}">${room.room}</div>
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:#555;margin-top:2px">${room.building}</div>
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:#adaaaa;margin-top:2px">${formatTime(room.minutes_until_next)}</div>`;
+    const _dcBldg = document.createElement('div');
+    _dcBldg.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:600;color:#767575;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px";
+    _dcBldg.textContent = room.building;
+    const _dcRoom = document.createElement('div');
+    _dcRoom.style.cssText = `font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:800;color:#fff`;
+    _dcRoom.textContent = room.room;
+    const _dcStatus = document.createElement('div');
+    _dcStatus.style.cssText = 'display:flex;align-items:center;gap:4px;margin-top:4px';
+    const _dcDot = document.createElement('span');
+    _dcDot.style.cssText = `width:5px;height:5px;border-radius:50%;background:${color};display:inline-block;flex-shrink:0`;
+    const _dcLabel = document.createElement('span');
+    _dcLabel.style.cssText = `font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.08em`;
+    _dcLabel.textContent = isSoon ? 'Closing soon' : 'Open';
+    _dcStatus.appendChild(_dcDot);
+    _dcStatus.appendChild(_dcLabel);
+    cell.appendChild(_dcBldg);
+    cell.appendChild(_dcRoom);
+    cell.appendChild(_dcStatus);
     container.appendChild(cell);
   });
 }
@@ -426,18 +441,61 @@ function renderDashBuildingFilter(buildings) {
   });
 }
 
+// ── Room grid skeleton loader ──────────────────────────────────────────────
+function renderRoomsGridSkeleton() {
+  const container = $('rooms-container');
+  if (!container) return;
+  container.textContent = '';
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < 12; i++) {
+    const card = document.createElement('div');
+    card.style.cssText = `background:linear-gradient(135deg,rgba(26,25,25,0.8),rgba(14,14,14,0.95));border:1px solid rgba(63,255,139,0.05);padding:14px;border-radius:2px;animation:pulse 1.5s ease-in-out infinite;animation-delay:${i*80}ms`;
+    const line1 = document.createElement('div');
+    line1.style.cssText = 'height:8px;width:40%;background:rgba(255,255,255,0.05);border-radius:2px;margin-bottom:8px';
+    const line2 = document.createElement('div');
+    line2.style.cssText = 'height:28px;width:60%;background:rgba(255,255,255,0.07);border-radius:2px;margin-bottom:16px';
+    const line3 = document.createElement('div');
+    line3.style.cssText = 'height:8px;width:80%;background:rgba(255,255,255,0.04);border-radius:2px';
+    card.appendChild(line1);
+    card.appendChild(line2);
+    card.appendChild(line3);
+    frag.appendChild(card);
+  }
+  container.appendChild(frag);
+}
+
 // ── Room grid (rooms view) ─────────────────────────────────────────────────
 function renderRoomsGrid(rooms) {
   const container = $('rooms-container');
   if (!container) return;
   setText('grid-count', `${rooms.length} rooms available`);
+  const _ts = $('grid-timestamp');
+  if (_ts) {
+    const _now = new Date();
+    _ts.textContent = `Updated ${_now.getHours()}:${String(_now.getMinutes()).padStart(2,'0')}`;
+  }
   container.textContent = '';
 
   if (!rooms.length) {
-    const p = document.createElement('p');
-    p.className = 'col-span-full text-center text-on-surface-variant py-20 text-xs font-label tracking-widest uppercase';
-    p.textContent = 'No empty rooms right now.';
-    container.appendChild(p);
+    const _emptyDiv = document.createElement('div');
+    _emptyDiv.className = 'col-span-full flex flex-col items-center justify-center py-24 gap-4';
+    const _emptyIcon = document.createElement('span');
+    _emptyIcon.className = 'material-symbols-outlined';
+    _emptyIcon.style.cssText = 'font-size:48px;color:#3fff8b;opacity:0.2';
+    _emptyIcon.textContent = 'meeting_room';
+    const _emptyText = document.createElement('div');
+    _emptyText.style.textAlign = 'center';
+    const _emptyTitle = document.createElement('div');
+    _emptyTitle.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:700;color:#adaaaa;text-transform:uppercase;letter-spacing:0.15em";
+    _emptyTitle.textContent = 'No empty rooms right now';
+    const _emptySub = document.createElement('div');
+    _emptySub.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:10px;color:#555;margin-top:6px";
+    _emptySub.textContent = 'Try adjusting filters or checking a different time';
+    _emptyText.appendChild(_emptyTitle);
+    _emptyText.appendChild(_emptySub);
+    _emptyDiv.appendChild(_emptyIcon);
+    _emptyDiv.appendChild(_emptyText);
+    container.appendChild(_emptyDiv);
     return;
   }
 
@@ -453,10 +511,14 @@ function renderRoomsGrid(rooms) {
     card.addEventListener('click',     () => openRoomDetail(room.building, room.room));
     card.addEventListener('mouseover', () => { card.style.borderColor = color + '50'; card.style.background = `linear-gradient(135deg,rgba(26,25,25,0.95),rgba(${color==='#3fff8b'?'14,40,24':'40,20,14'},0.95))`; });
     card.addEventListener('mouseout',  () => { card.style.borderColor = border; card.style.background = 'linear-gradient(135deg,rgba(26,25,25,0.8),rgba(14,14,14,0.95))'; });
+    const capLabel = room.capacity ? `<span style="font-family:'Space Grotesk',sans-serif;font-size:8px;color:#484847;letter-spacing:0.1em">cap ${room.capacity}</span>` : '';
     card.innerHTML = `
       <div style="position:absolute;top:0;left:0;right:0;height:2px;background:${color};opacity:0.6"></div>
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:600;color:#555;letter-spacing:0.15em;text-transform:uppercase;margin-bottom:4px">${room.building}</div>
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:26px;font-weight:800;color:#fff;letter-spacing:0.05em;margin-bottom:12px">${room.room}</div>
+      <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:600;color:#767575;letter-spacing:0.15em;text-transform:uppercase;margin-bottom:4px">${room.building}</div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:12px">
+        <span style="font-family:'Space Grotesk',sans-serif;font-size:26px;font-weight:800;color:#fff;letter-spacing:0.05em">${room.room}</span>
+        ${capLabel}
+      </div>
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="display:flex;align-items:center;gap:5px">
           <span style="width:6px;height:6px;border-radius:50%;background:${color};display:inline-block;animation:pulse 2s infinite"></span>
@@ -877,6 +939,11 @@ function renderRoomDetail(data) {
   setText('rds-day', `${data.weekday} · Today`);
   const n = data.classes.length;
   setText('rds-summary', n === 0 ? 'No classes today' : `${n} class${n !== 1 ? 'es' : ''} scheduled`);
+  const capEl = $('rds-capacity');
+  if (capEl) {
+    if (data.capacity) { capEl.textContent = `cap ${data.capacity}`; capEl.classList.remove('hidden'); }
+    else { capEl.classList.add('hidden'); }
+  }
 
   // Timeline bar
   const tl = $('rds-timeline');
@@ -1089,6 +1156,7 @@ async function fetchSemesterLabel() {
     setText('sidebar-semester', label);
     setText('dash-semester',    d.semester ? `${d.semester} · Auto-refresh 60s` : 'Auto-refresh 60s');
     setText('footer-semester',  d.semester || '–');
+    setText('rooms-view-semester', d.semester ? `LIVE · ${d.semester}` : 'LIVE');
   } catch(e) { /* non-critical */ }
 }
 

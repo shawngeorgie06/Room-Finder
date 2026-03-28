@@ -74,12 +74,18 @@ def load_schedule(xlsx_path):
             continue
         time_start, time_end = parsed
 
+        try:
+            cap = int(float(str(row.get("Max", "")).strip()))
+        except (ValueError, TypeError):
+            cap = None
+
         results.append({
             "building": building,
             "room": room,
             "days": days,
             "time_start": time_start,
             "time_end": time_end,
+            "capacity": cap,
         })
 
     return results
@@ -130,7 +136,14 @@ def get_empty_rooms(schedule, weekday, now, building=None, min_duration_mins=0):
         if min_duration_mins > 0 and minutes_until_next is not None and minutes_until_next < min_duration_mins:
             continue
 
-        results.append({"building": bldg, "room": room, "minutes_until_next": minutes_until_next})
+        # Compute max capacity across all schedule entries for this room (any day)
+        cap = max(
+            (e.get("capacity") for e in schedule
+             if e["building"] == bldg and e["room"] == room and e.get("capacity")),
+            default=None,
+        )
+
+        results.append({"building": bldg, "room": room, "minutes_until_next": minutes_until_next, "capacity": cap})
 
     results.sort(key=lambda r: (r["building"], r["room"]))
     return results
