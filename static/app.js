@@ -243,10 +243,8 @@ function updateStats(buildings) {
   setText('stat-bldg', buildings.length);
   setText('hdr-empty', isNoClasses ? 'All' : totalEmpty);
   setText('hdr-occ', occ);
-  const dayAbbr = state.dayAt
-    ? state.dayAt.slice(0, 3).toUpperCase()
-    : new Date().toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase();
-  setText('hdr-day', dayAbbr);
+  const dayFull = state.dayAt || new Date().toLocaleDateString('en-US', { weekday: 'long' });
+  setText('hdr-day', dayFull);
   setText('health-sections', (totalRooms * 3).toLocaleString());
   setText('health-bldg', buildings.length);
   setText('health-occ', occ + '%');
