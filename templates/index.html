@@ -149,7 +149,12 @@
       <span class="material-symbols-outlined text-xl">settings</span><span>Settings</span>
     </a>
   </nav>
-  <div class="p-4 space-y-4 mt-auto">
+  <!-- Sidebar top rooms -->
+  <div class="flex-1 px-3 py-2 overflow-hidden">
+    <div class="text-[9px] font-label text-on-surface-variant/50 uppercase tracking-widest px-2 mb-2">Best Right Now</div>
+    <div id="sidebar-top-rooms" class="space-y-0.5"></div>
+  </div>
+  <div class="p-4 space-y-4">
     <div class="bg-surface-container/50 p-3 border border-outline-variant/10 rounded-sm">
       <div class="text-[10px] font-label text-on-surface-variant mb-2">System Status</div>
       <div class="flex items-center justify-between">
@@ -264,43 +269,16 @@
           </div>
         </div>
 
-        <!-- SYSTEM HEALTH (decorative but styled) -->
-        <div class="hidden lg:flex col-span-12 lg:col-span-5 glass-card border border-primary/10 p-6 rounded-sm relative overflow-hidden group flex-col">
-          <div class="flex items-center justify-between mb-8">
+        <!-- BEST ROOMS RIGHT NOW -->
+        <div class="hidden lg:flex col-span-12 lg:col-span-5 glass-card border border-primary/10 p-6 rounded-sm flex-col">
+          <div class="flex items-center justify-between mb-5">
             <div class="flex items-center gap-3">
-              <span class="material-symbols-outlined text-primary text-xl">monitor_heart</span>
-              <h3 class="text-xs font-label uppercase tracking-[0.2em] text-on-surface">Schedule Data Health</h3>
+              <span class="material-symbols-outlined text-primary text-xl">star</span>
+              <h3 class="text-xs font-label uppercase tracking-[0.2em] text-on-surface">Best Rooms Right Now</h3>
             </div>
-            <div class="flex items-center gap-2 px-2 py-1 bg-primary/10 border border-primary/30 rounded-sm">
-              <span class="w-1.5 h-1.5 bg-primary rounded-full animate-pulse"></span>
-              <span class="text-[9px] font-bold text-primary tracking-widest">STABLE</span>
-            </div>
+            <button onclick="switchView('rooms')" class="text-[9px] font-bold text-primary tracking-widest uppercase hover:opacity-70 transition-all">View All →</button>
           </div>
-          <div class="space-y-6">
-            <div id="building-bars" class="relative flex items-end gap-1 h-20 mb-2">
-              <!-- filled by JS -->
-            </div>
-            <div class="grid grid-cols-3 gap-6 py-6 border-y border-outline-variant/10">
-              <div>
-                <div class="text-[9px] text-on-surface-variant font-label tracking-widest mb-1 uppercase">Sections Loaded</div>
-                <div id="health-sections" class="text-xl font-headline font-bold text-white">--</div>
-              </div>
-              <div>
-                <div class="text-[9px] text-on-surface-variant font-label tracking-widest mb-1 uppercase">Buildings</div>
-                <div id="health-bldg" class="text-xl font-headline font-bold text-white">--</div>
-              </div>
-              <div>
-                <div class="text-[9px] text-on-surface-variant font-label tracking-widest mb-1 uppercase">Avg Occupancy</div>
-                <div id="health-occ" class="text-xl font-headline font-bold text-white">--%</div>
-              </div>
-            </div>
-            <div class="flex items-center gap-4 pt-2">
-              <div class="flex-1 h-1 bg-surface-container rounded-full overflow-hidden">
-                <div id="health-bar" class="h-full bg-primary shadow-[0_0_8px_#3fff8b] transition-all" style="width:0%"></div>
-              </div>
-              <span id="health-bar-label" class="text-[10px] font-label text-on-surface-variant">LOADING...</span>
-            </div>
-          </div>
+          <div id="dash-best-rooms" class="flex-1 space-y-2 overflow-y-auto"></div>
         </div>
 
         <!-- EMPTY ROOMS TABLE -->

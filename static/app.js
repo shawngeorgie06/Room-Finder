@@ -224,6 +224,8 @@ async function fetchRooms() {
     renderDashRooms(data);
     renderRoomsTable(data);
     renderRoomsGrid(data);
+    renderBestRooms(data);
+    renderSidebarTopRooms(data);
     const t = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
     setText('sidebar-status', `${data.length} rooms free · ${t}`);
     setText('footer-sync', t);
@@ -349,6 +351,78 @@ function toggleMobileSearch() {
 }
 
 // ── Health bars ────────────────────────────────────────────────────────────
+function _sortedBestRooms(rooms, limit) {
+  return [...rooms].sort((a, b) => {
+    if (a.minutes_until_next === null && b.minutes_until_next === null) return 0;
+    if (a.minutes_until_next === null) return -1;
+    if (b.minutes_until_next === null) return 1;
+    return b.minutes_until_next - a.minutes_until_next;
+  }).slice(0, limit);
+}
+
+function renderBestRooms(rooms) {
+  const container = $('dash-best-rooms');
+  if (!container) return;
+  container.innerHTML = '';
+  const best = _sortedBestRooms(rooms, 6);
+  if (!best.length) {
+    container.innerHTML = `<div style="text-align:center;padding:32px;color:#484847;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em">No rooms available</div>`;
+    return;
+  }
+  best.forEach(room => {
+    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
+    const color = isSoon ? '#f59e0b' : '#3fff8b';
+    const barPct = room.minutes_until_next === null ? 100 : Math.min(100, room.minutes_until_next / 180 * 100);
+    const row = document.createElement('div');
+    row.style.cssText = `padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.04);border-radius:2px;cursor:pointer;transition:all 0.15s`;
+    row.addEventListener('click', () => openRoomDetail(room.building, room.room));
+    row.addEventListener('mouseover', () => { row.style.background = 'rgba(63,255,139,0.05)'; row.style.borderColor = 'rgba(63,255,139,0.15)'; });
+    row.addEventListener('mouseout',  () => { row.style.background = 'rgba(255,255,255,0.02)'; row.style.borderColor = 'rgba(255,255,255,0.04)'; });
+    row.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div>
+          <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:#767575;text-transform:uppercase;letter-spacing:0.1em">${room.building}</span>
+          <span style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:800;color:#fff;margin-left:8px">${room.room}</span>
+        </div>
+        <span style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:700;color:${color}">${formatTime(room.minutes_until_next)}</span>
+      </div>
+      <div style="height:2px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden">
+        <div style="height:100%;width:${barPct}%;background:${color};opacity:0.5;transition:width 0.5s ease"></div>
+      </div>`;
+    container.appendChild(row);
+  });
+}
+
+function renderSidebarTopRooms(rooms) {
+  const container = $('sidebar-top-rooms');
+  if (!container) return;
+  container.innerHTML = '';
+  const best = _sortedBestRooms(rooms, 5);
+  if (!best.length) {
+    const el = document.createElement('div');
+    el.style.cssText = `padding:8px;font-family:'Space Grotesk',sans-serif;font-size:9px;color:#484847;text-transform:uppercase;letter-spacing:0.1em`;
+    el.textContent = 'None available';
+    container.appendChild(el);
+    return;
+  }
+  best.forEach(room => {
+    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
+    const color = isSoon ? '#f59e0b' : '#3fff8b';
+    const btn = document.createElement('button');
+    btn.style.cssText = `width:100%;display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:2px;transition:background 0.15s;cursor:pointer;border:none;background:transparent;text-align:left`;
+    btn.addEventListener('click', () => openRoomDetail(room.building, room.room));
+    btn.addEventListener('mouseover', () => { btn.style.background = 'rgba(255,255,255,0.05)'; });
+    btn.addEventListener('mouseout',  () => { btn.style.background = 'transparent'; });
+    btn.innerHTML = `
+      <div>
+        <span style="font-family:'Space Grotesk',sans-serif;font-size:8px;color:#767575;text-transform:uppercase;letter-spacing:0.1em">${room.building}</span>
+        <span style="font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:700;color:#fff;margin-left:6px">${room.room}</span>
+      </div>
+      <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:${color};white-space:nowrap">${formatTime(room.minutes_until_next)}</span>`;
+    container.appendChild(btn);
+  });
+}
+
 function renderHealthBars(buildings) {
   const container = $('building-bars');
   if (!container) return;
@@ -552,7 +626,7 @@ function renderRoomsGrid(rooms) {
           <span style="width:6px;height:6px;border-radius:50%;background:${color};display:inline-block;animation:pulse 2s infinite"></span>
           <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.1em">${isSoon?'CLOSING':'OPEN'}</span>
         </div>
-        <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:${isSoon?color:'#767575'}">${formatTime(room.minutes_until_next)}</span>
+        <span style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:800;color:${color};letter-spacing:0.02em">${formatTime(room.minutes_until_next)}</span>
       </div>`;
     frag.appendChild(card);
   });
