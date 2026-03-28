@@ -1249,16 +1249,25 @@ function toggleFreeAllDay() {
 }
 
 // ── Semester label ─────────────────────────────────────────────────────────
+function _inferSemester() {
+  const now = new Date();
+  const month = now.getMonth() + 1; // 1-12
+  const year  = now.getFullYear();
+  if (month >= 1 && month <= 5)  return `Spring ${year}`;
+  if (month >= 6 && month <= 7)  return `Summer ${year}`;
+  return `Fall ${year}`;
+}
+
 async function fetchSemesterLabel() {
   try {
     const r = await fetch('/api/schedule-info');
     if (!r.ok) return;
     const d = await r.json();
-    const label = d.semester ? `${d.semester} · Live` : 'Live';
-    setText('sidebar-semester', label);
-    setText('dash-semester',    d.semester ? `${d.semester} · Auto-refresh 60s` : 'Auto-refresh 60s');
-    setText('footer-semester',  d.semester || '–');
-    setText('rooms-view-semester', d.semester ? `LIVE · ${d.semester}` : 'LIVE');
+    const sem = d.semester || _inferSemester();
+    setText('sidebar-semester', `${sem} · Live`);
+    setText('dash-semester',    `${sem} · Auto-refresh 60s`);
+    setText('footer-semester',  sem);
+    setText('rooms-view-semester', `LIVE · ${sem}`);
   } catch(e) { /* non-critical */ }
 }
 
