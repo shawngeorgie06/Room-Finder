@@ -1,8 +1,29 @@
 import os
+import threading
+import time
+import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from schedule import load_schedule, get_empty_rooms
+
+
+def _start_keepalive():
+    """Ping self every 14 min so Render doesn't spin down the free instance."""
+    url = os.environ.get('RENDER_EXTERNAL_URL', '').rstrip('/')
+    if not url:
+        return  # not on Render, skip
+
+    def _ping():
+        while True:
+            time.sleep(14 * 60)
+            try:
+                urllib.request.urlopen(f"{url}/ping", timeout=10)
+            except Exception:
+                pass  # best-effort, ignore errors
+
+    t = threading.Thread(target=_ping, daemon=True)
+    t.start()
 
 UPLOAD_FOLDER = os.path.dirname(__file__)
 EASTERN = ZoneInfo('America/New_York')
@@ -121,6 +142,10 @@ def create_app(schedule=None):
         else:
             schedule = []
             print("No schedule CSV found — upload one via the Settings page.")
+
+    @app.route("/ping")
+    def ping():
+        return "ok", 200
 
     @app.route("/")
     def index():
@@ -367,6 +392,7 @@ def create_app(schedule=None):
             'rooms': len(rooms),
         })
 
+    _start_keepalive()
     return app
 
 
