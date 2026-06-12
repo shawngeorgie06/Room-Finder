@@ -264,7 +264,10 @@ XMLHttpRequest.prototype.send=function(...a){
       const rows=d.data||d.rows||(Array.isArray(d)?d:null);
       if(!rows||!rows.length)return;
       const keys=Object.keys(rows[0]).map(k=>k.toUpperCase());
-      if(!keys.some(k=>["CRN","DAYS","TIMES","LOCATION","COURSE"].includes(k)))return;
+      /* Require real section data: a course-catalog response also has COURSE
+         but lacks times/rooms, and would poison the export with junk rows */
+      const want=["CRN","TIMES","LOCATION","DAYS"];
+      if(want.filter(k=>keys.includes(k)).length<3){console.log("Skipping non-section XHR, keys:",keys);return;}
       const subj=currentSubj;
       if(subj){
         if(!captured[subj])captured[subj]=[];
