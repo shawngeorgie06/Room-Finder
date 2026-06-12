@@ -68,3 +68,13 @@ class TestRoomsEndpoint:
         resp = client.get("/")
         assert resp.status_code == 200
         assert b"<!DOCTYPE html>" in resp.data or b"<html" in resp.data
+
+    def test_service_worker_served_from_root(self, client):
+        # PWA: must be served from / so its scope covers the whole app
+        resp = client.get("/sw.js")
+        assert resp.status_code == 200
+        assert "javascript" in resp.headers.get("Content-Type", "")
+
+    def test_manifest_served(self, client):
+        resp = client.get("/static/manifest.json")
+        assert resp.status_code == 200

@@ -51,15 +51,119 @@ def parse_day_param(day_str):
     return None
 
 
-def _parse_semester(filename):
-    """Return e.g. 'Spring 2026' from 'Course_Schedule_202610.csv', or None."""
+def _term_code_from_filename(filename):
+    """Return e.g. 202610 from 'Course_Schedule_202610.csv', or None."""
     import re
     m = re.search(r'(\d{4})(\d{2})', filename or '')
-    if not m:
+    return int(m.group(1) + m.group(2)) if m else None
+
+
+def _term_label(term_code):
+    """Return e.g. 'Spring 2026' for 202610, or None."""
+    if term_code is None:
         return None
-    year, code = m.group(1), m.group(2)
-    season = SEMESTER_CODES.get(code, f'Term {code}')
+    year, code = divmod(term_code, 100)
+    season = SEMESTER_CODES.get(f'{code:02d}', f'Term {code:02d}')
     return f'{season} {year}'
+
+
+def _expected_term(today):
+    """Term code for the semester in session on `today`:
+    Jan–Apr → Spring (10), May–Jul → Summer (50), Aug–Dec → Fall (90)."""
+    if today.month <= 4:
+        code = 10
+    elif today.month <= 7:
+        code = 50
+    else:
+        code = 90
+    return today.year * 100 + code
+
+
+def _is_stale(term_code, today):
+    """True if the loaded schedule's term predates the current semester.
+    Current or future terms are fresh; None when the term is unknown."""
+    if term_code is None:
+        return None
+    return term_code < _expected_term(today)
+
+
+def _schedule_status(term_code, today):
+    """Classify the loaded term vs the current semester:
+    'current', 'stale' (past), 'future' (upcoming), or 'unknown'."""
+    if term_code is None:
+        return 'unknown'
+    expected = _expected_term(today)
+    if term_code == expected:
+        return 'current'
+    return 'stale' if term_code < expected else 'future'
+
+
+def _term_from_entries(entries):
+    """Most common term code in the loaded data (e.g. 202610), or None."""
+    from collections import Counter
+    counts = Counter(
+        e.get('term', '') for e in entries
+        if str(e.get('term', '')).strip().isdigit()
+    )
+    if not counts:
+        return None
+    return int(counts.most_common(1)[0][0])
+
+
+def _default_schedule_candidates(folder, today=None):
+    """Schedule files to try, best first. Ordering: legacy un-termed uploads,
+    then term-dated files by closeness to the current semester (exact match,
+    nearest future, newest past — per-term uploads beat bundled exports),
+    then the bundled default. The loader takes the first non-empty one."""
+    if today is None:
+        today = datetime.now(EASTERN).date()
+    expected = _expected_term(today)
+
+    candidates = [
+        c for c in ['uploaded_schedule.xlsx', 'uploaded_schedule.csv']
+        if os.path.exists(os.path.join(folder, c))
+    ]
+
+    import glob
+    dated = []
+    for pattern in ('uploaded_schedule_*.csv', 'uploaded_schedule_*.xlsx',
+                    'Course_Schedule_*.csv', 'Course_Schedule_*.xlsx'):
+        for p in glob.glob(os.path.join(folder, pattern)):
+            name = os.path.basename(p)
+            term = _term_code_from_filename(name)
+            if term:
+                dated.append((name, term))
+
+    def closeness(item):
+        name, term = item
+        is_export = 0 if name.startswith('uploaded_') else 1
+        if term == expected:
+            return (0, 0, is_export)
+        if term > expected:
+            return (1, term, is_export)   # future: nearest first
+        return (2, -term, is_export)      # past: newest first
+
+    candidates += [name for name, _ in sorted(dated, key=closeness)]
+
+    if os.path.exists(os.path.join(folder, 'schedule_default.csv')):
+        candidates.append('schedule_default.csv')
+    return candidates
+
+
+def _load_best_schedule():
+    """Load the first usable schedule candidate from UPLOAD_FOLDER.
+    Returns (entries, filename); ([], '') when nothing usable exists."""
+    for candidate in _default_schedule_candidates(UPLOAD_FOLDER):
+        try:
+            entries = load_schedule(os.path.join(UPLOAD_FOLDER, candidate))
+        except Exception as e:
+            print(f"Skipping '{candidate}': {e}")
+            continue
+        if not entries:
+            print(f"Skipping '{candidate}': no valid schedule entries.")
+            continue
+        return entries, candidate
+    return [], ''
 
 def get_current_time():
     """Returns (weekday_int, time_object) in Eastern time."""
@@ -103,45 +207,98 @@ def _compute_next_free_window(classes_out, now_min):
         dur = first_start - now_min
         return {'start': mins_to_str(now_min), 'end': mins_to_str(first_start), 'duration_mins': dur}
 
-    # Case 2: find gap between consecutive classes after now
+    # Case 2: first real gap (back-to-back classes produce zero-width gaps — skip them)
     for i in range(len(classes_out) - 1):
         gap_start = classes_out[i]['end_min']
         gap_end   = classes_out[i + 1]['start_min']
-        if gap_start > now_min and gap_end > gap_start:
+        if gap_start >= now_min and gap_end > gap_start:
             dur = gap_end - gap_start
             return {'start': mins_to_str(gap_start), 'end': mins_to_str(gap_end), 'duration_mins': dur}
-        # If we're inside a class, look for gap after it ends
-        if classes_out[i]['start_min'] <= now_min < classes_out[i]['end_min']:
-            gap_start = classes_out[i]['end_min']
-            if i + 1 < len(classes_out):
-                gap_end = classes_out[i + 1]['start_min']
-                dur = gap_end - gap_start
-                return {'start': mins_to_str(gap_start), 'end': mins_to_str(gap_end), 'duration_mins': dur}
 
     # Case 3: after all classes — free rest of day
     return None
 
 
+def resolve_query_context():
+    """Resolve (weekday, time, min_duration) from ?at/?day/?for query params,
+    defaulting to the current Eastern time. Invalid values fall back to defaults."""
+    weekday, now = get_current_time()
+    at_time = parse_at_param(request.args.get("at"))
+    if at_time:
+        now = at_time
+    day_override = parse_day_param(request.args.get("day"))
+    if day_override is not None:
+        weekday = day_override
+    for_mins = request.args.get("for", default=0, type=int) or 0
+    return weekday, now, for_mins
+
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # schedule exports are ~2 MB; 10 MB is generous
+
+# The bookmarklet runs on the Banner page and POSTs the extracted schedule
+# directly to this app — that cross-origin request needs CORS, but only on
+# the upload endpoint and only for the Banner origin.
+BANNER_ORIGIN = 'https://generalssb-prod.ec.njit.edu'
+UPLOAD_ENDPOINT = '/api/upload-schedule'
+
+
 def create_app(schedule=None):
     app = Flask(__name__)
+    app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_BYTES
 
-    # Schedule metadata tracked alongside the mutable list
-    meta = {'filename': '', 'loaded_at': None}
+    # Schedule metadata tracked alongside the mutable list.
+    # NOTE: uploads mutate this in-process list, which only stays consistent
+    # because gunicorn runs a single worker. Don't add -w N without moving
+    # schedule reload to a file-watch or per-request mtime check.
+    meta = {'filename': '', 'loaded_at': None, 'term': None}
+    if schedule:
+        meta['term'] = _term_from_entries(schedule)
+
+    def _activate(entries, filename):
+        schedule.clear()
+        schedule.extend(entries)
+        meta['filename'] = filename
+        meta['loaded_at'] = datetime.now().isoformat(timespec='seconds')
+        meta['term'] = _term_from_entries(entries) or _term_code_from_filename(filename)
+
+    def _maybe_reactivate():
+        """Switch to a better schedule file if the semester rolled over.
+        Cheap no-op when nothing changed: the scan stops as soon as it
+        reaches the currently active file."""
+        for candidate in _default_schedule_candidates(UPLOAD_FOLDER):
+            if candidate == meta['filename']:
+                return
+            try:
+                entries = load_schedule(os.path.join(UPLOAD_FOLDER, candidate))
+            except Exception:
+                continue
+            if entries:
+                _activate(entries, candidate)
+                print(f"Semester rollover: switched to '{candidate}' ({len(entries)} entries).")
+                return
+
+    # Only re-resolve from disk for apps that loaded from disk — never for
+    # explicitly injected schedules (tests)
+    auto_loaded = schedule is None
 
     if schedule is None:
-        # Prefer a previously uploaded schedule, then bundled default
-        for candidate in ['uploaded_schedule.xlsx', 'uploaded_schedule.csv',
-                          'schedule_default.csv', 'Course_Schedule_202610.csv']:
-            csv_path = os.path.join(UPLOAD_FOLDER, candidate)
-            if os.path.exists(csv_path):
-                schedule = load_schedule(csv_path)
-                meta['filename'] = candidate
-                meta['loaded_at'] = datetime.now().isoformat(timespec='seconds')
-                print(f"Loaded {len(schedule)} entries from '{candidate}'.")
-                break
+        schedule = []
+        entries, filename = _load_best_schedule()
+        if entries:
+            _activate(entries, filename)
+            print(f"Loaded {len(schedule)} entries from '{filename}'.")
         else:
-            schedule = []
-            print("No schedule CSV found — upload one via the Settings page.")
+            print("No usable schedule file found — upload one via the Settings page.")
+
+    @app.after_request
+    def add_upload_cors_headers(response):
+        # Applied via after_request so error responses (401/413/422) carry the
+        # headers too — otherwise the bookmarklet can't read failure reasons.
+        if request.path == UPLOAD_ENDPOINT:
+            response.headers['Access-Control-Allow-Origin'] = BANNER_ORIGIN
+            response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response
 
     @app.route("/ping")
     def ping():
@@ -150,6 +307,15 @@ def create_app(schedule=None):
     @app.route("/")
     def index():
         return render_template("index.html")
+
+    @app.route("/sw.js")
+    def service_worker():
+        # Served from the root path so the service worker's scope covers
+        # the whole app (a worker under /static/ could only control /static/)
+        return send_from_directory(
+            os.path.join(os.path.dirname(__file__), 'static'), 'sw.js',
+            mimetype='application/javascript'
+        )
 
     @app.route("/bookmarklet")
     def bookmarklet():
@@ -160,28 +326,16 @@ def create_app(schedule=None):
 
     @app.route("/api/rooms")
     def rooms():
-        weekday, now = get_current_time()
-        at_time = parse_at_param(request.args.get("at"))
-        if at_time:
-            now = at_time
-        day_override = parse_day_param(request.args.get("day"))
-        if day_override is not None:
-            weekday = day_override
-        for_mins = int(request.args.get("for", 0) or 0)
+        weekday, now, for_mins = resolve_query_context()
         building = request.args.get("building") or None
-        result = get_empty_rooms(schedule, weekday=weekday, now=now, building=building, min_duration_mins=for_mins)
+        until = parse_at_param(request.args.get("until"))
+        result = get_empty_rooms(schedule, weekday=weekday, now=now, building=building,
+                                 min_duration_mins=for_mins, until=until)
         return jsonify(result)
 
     @app.route("/api/buildings")
     def buildings_api():
-        weekday, now = get_current_time()
-        at_time = parse_at_param(request.args.get("at"))
-        if at_time:
-            now = at_time
-        day_override = parse_day_param(request.args.get("day"))
-        if day_override is not None:
-            weekday = day_override
-        for_mins = int(request.args.get("for", 0) or 0)
+        weekday, now, for_mins = resolve_query_context()
         empty_rooms = get_empty_rooms(schedule, weekday=weekday, now=now, min_duration_mins=for_mins)
 
         empty_by_building = {}
@@ -213,14 +367,7 @@ def create_app(schedule=None):
 
     @app.route("/api/rooms/all")
     def all_rooms_api():
-        weekday, now = get_current_time()
-        at_time = parse_at_param(request.args.get("at"))
-        if at_time:
-            now = at_time
-        day_override = parse_day_param(request.args.get("day"))
-        if day_override is not None:
-            weekday = day_override
-        for_mins = int(request.args.get("for", 0) or 0)
+        weekday, now, for_mins = resolve_query_context()
         building_filter = request.args.get("building") or None
 
         empty_rooms_list = get_empty_rooms(schedule, weekday=weekday, now=now, building=building_filter, min_duration_mins=for_mins)
@@ -302,6 +449,9 @@ def create_app(schedule=None):
                 'start_min':  s,
                 'end_min':    e,
                 'is_current': s <= now_min < e,
+                'course':     cls.get('course', ''),
+                'title':      cls.get('title', ''),
+                'instructor': cls.get('instructor', ''),
             })
 
         occupied_now = any(c['start_min'] <= now_min < c['end_min'] for c in classes_out)
@@ -330,24 +480,67 @@ def create_app(schedule=None):
             'capacity':          room_capacity,
         })
 
+    @app.route("/api/heatmap")
+    def heatmap_api():
+        """Per-building weekly occupancy: for each weekday and each hour
+        7 AM–10 PM, how many rooms have a class overlapping that hour."""
+        building = request.args.get("building", "").strip()
+        if not building:
+            return jsonify({'error': 'building is required'}), 400
+
+        entries = [e for e in schedule if e['building'] == building]
+        if not entries:
+            return jsonify({'error': f'No rooms found for building {building}.'}), 404
+
+        hours = list(range(7, 22))
+        days = []
+        for d in range(7):
+            counts = []
+            for h in hours:
+                h_start, h_end = h * 60, (h + 1) * 60
+                occupied = set(
+                    e['room'] for e in entries
+                    if d in e['days']
+                    and e['time_start'].hour * 60 + e['time_start'].minute < h_end
+                    and e['time_end'].hour * 60 + e['time_end'].minute > h_start
+                )
+                counts.append(len(occupied))
+            days.append(counts)
+
+        return jsonify({
+            'building': building,
+            'total_rooms': len(set(e['room'] for e in entries)),
+            'hours': hours,
+            'days': days,
+        })
+
     @app.route("/api/schedule-info")
     def schedule_info():
+        if auto_loaded:
+            _maybe_reactivate()
         buildings = set(e['building'] for e in schedule)
         rooms = set((e['building'], e['room']) for e in schedule)
         weekday, _ = get_current_time()
         has_classes_today = any(weekday in e['days'] for e in schedule)
+        today = datetime.now(EASTERN).date()
+        term = meta['term'] or _term_code_from_filename(meta['filename'])
         return jsonify({
             'filename': meta['filename'],
             'loaded_at': meta['loaded_at'],
             'entries': len(schedule),
             'buildings': len(buildings),
             'rooms': len(rooms),
-            'semester': _parse_semester(meta['filename']),
+            'semester': _term_label(term),
+            'stale': _is_stale(term, today),
+            'status': _schedule_status(term, today),
+            'expected_semester': _term_label(_expected_term(today)),
             'has_classes_today': has_classes_today,
         })
 
-    @app.route("/api/upload-schedule", methods=["POST"])
+    @app.route("/api/upload-schedule", methods=["POST", "OPTIONS"])
     def upload_schedule():
+        if request.method == "OPTIONS":
+            return "", 204  # CORS preflight; headers added by after_request
         # Password check — only enforced when UPLOAD_PASSWORD env var is set
         required_pw = os.environ.get('UPLOAD_PASSWORD', '').strip()
         if required_pw:
@@ -363,33 +556,55 @@ def create_app(schedule=None):
         if not f.filename.lower().endswith(('.csv', '.xlsx')):
             return jsonify({'error': 'Only CSV or Excel (.xlsx) files are accepted.'}), 400
 
+        # Validate against a temp file first — the final path is in the restart
+        # load order, so a bad file must never land there.
         ext = '.xlsx' if f.filename.lower().endswith('.xlsx') else '.csv'
-        save_path = os.path.join(UPLOAD_FOLDER, f'uploaded_schedule{ext}')
-        f.save(save_path)
+        # Temp name keeps the real extension — load_schedule sniffs it
+        tmp_path = os.path.join(UPLOAD_FOLDER, f'uploaded_schedule_tmp{ext}')
+        f.save(tmp_path)
 
         try:
-            new_data = load_schedule(save_path)
+            new_data = load_schedule(tmp_path)
         except Exception as e:
+            os.remove(tmp_path)
             return jsonify({'error': f'Could not parse CSV: {e}'}), 422
 
         if not new_data:
+            os.remove(tmp_path)
             return jsonify({'error': 'CSV parsed but no valid schedule entries found. Check the file format.'}), 422
 
-        schedule.clear()
-        schedule.extend(new_data)
-        meta['filename'] = f.filename
-        meta['loaded_at'] = datetime.now().isoformat(timespec='seconds')
+        # One file per term so semesters coexist (upload fall while summer runs)
+        term = _term_from_entries(new_data) or _term_code_from_filename(f.filename)
+        stem = f'uploaded_schedule_{term}' if term else 'uploaded_schedule'
+        os.replace(tmp_path, os.path.join(UPLOAD_FOLDER, f'{stem}{ext}'))
 
-        buildings = set(e['building'] for e in schedule)
-        rooms = set((e['building'], e['room']) for e in schedule)
-        print(f"Schedule reloaded: {len(schedule)} entries from '{f.filename}'")
+        # Remove files this upload supersedes: the same term's other extension
+        # and legacy un-termed uploads (both outrank term files at load time).
+        other_ext = '.csv' if ext == '.xlsx' else '.xlsx'
+        for superseded in (f'{stem}{other_ext}',
+                           'uploaded_schedule.csv', 'uploaded_schedule.xlsx'):
+            path = os.path.join(UPLOAD_FOLDER, superseded)
+            if os.path.exists(path):
+                os.remove(path)
+
+        # Activate the best term for today — not necessarily the one uploaded
+        best_entries, best_file = _load_best_schedule()
+        if best_entries:
+            _activate(best_entries, best_file)
+
+        buildings = set(e['building'] for e in new_data)
+        rooms = set((e['building'], e['room']) for e in new_data)
+        print(f"Upload saved: {len(new_data)} entries from '{f.filename}' "
+              f"(term {term}); active schedule is '{meta['filename']}'")
         return jsonify({
             'success': True,
-            'filename': meta['filename'],
+            'filename': f.filename,
             'loaded_at': meta['loaded_at'],
-            'entries': len(schedule),
+            'entries': len(new_data),
             'buildings': len(buildings),
             'rooms': len(rooms),
+            'uploaded_semester': _term_label(term),
+            'active_semester': _term_label(meta['term']),
         })
 
     _start_keepalive()

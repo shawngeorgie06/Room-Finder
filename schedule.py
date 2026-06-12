@@ -1,8 +1,8 @@
-import pandas as pd
+import csv
 from datetime import datetime
 import warnings
 
-DAY_MAP = {"M": 0, "T": 1, "W": 2, "R": 3, "F": 4, "S": 5}
+DAY_MAP = {"M": 0, "T": 1, "W": 2, "R": 3, "F": 4, "S": 5, "U": 6}
 VALID_MODES = {"Face-to-Face", "Hybrid"}
 
 
@@ -41,41 +41,65 @@ def parse_location(location_str):
     return parts[0].strip(), parts[1].strip()
 
 
-def load_schedule(xlsx_path):
+def _iter_rows_csv(path):
+    """Yield rows of a CSV file as {header: str} dicts."""
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        for row in csv.DictReader(fh):
+            yield {(k or "").strip(): (v or "") for k, v in row.items()}
+
+
+def _iter_rows_xlsx(path):
+    """Yield rows of the first sheet of an XLSX file as {header: str} dicts."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        ws = wb.worksheets[0]
+        rows = ws.iter_rows(values_only=True)
+        headers = [str(h).strip() if h is not None else "" for h in next(rows, [])]
+        for values in rows:
+            yield {
+                h: ("" if v is None else str(v))
+                for h, v in zip(headers, values) if h
+            }
+    finally:
+        wb.close()
+
+
+def load_schedule(path):
     """
-    Load and parse the Excel schedule file.
-    Returns a list of dicts: building, room, days, time_start, time_end.
+    Load and parse a Banner schedule export (CSV or XLSX).
+    Returns a list of dicts: building, room, days, time_start, time_end,
+    capacity, course, title, instructor.
     Filters to Face-to-Face and Hybrid only. Skips rows with blank locations.
     """
-    if str(xlsx_path).endswith(".csv"):
-        df = pd.read_csv(xlsx_path, dtype=str)
+    if str(path).lower().endswith(".csv"):
+        rows = _iter_rows_csv(path)
     else:
-        df = pd.read_excel(xlsx_path, dtype=str)
-    df.columns = [c.strip() for c in df.columns]
+        rows = _iter_rows_xlsx(path)
 
     results = []
-    for _, row in df.iterrows():
-        mode = str(row.get("Delivery Mode", "")).strip()
+    for row in rows:
+        mode = row.get("Delivery Mode", "").strip()
         if mode not in VALID_MODES:
             continue
 
-        loc = parse_location(str(row.get("Location", "")))
+        loc = parse_location(row.get("Location", ""))
         if loc is None:
             continue
         building, room = loc
 
-        days = parse_days(str(row.get("Days", "")))
+        days = parse_days(row.get("Days", ""))
         if not days:
             continue
 
-        parsed = parse_time_range(str(row.get("Times", "")))
+        parsed = parse_time_range(row.get("Times", ""))
         if parsed is None:
             warnings.warn(f"Skipping row with unparseable time: {row.get('Times')}")
             continue
         time_start, time_end = parsed
 
         try:
-            cap = int(float(str(row.get("Max", "")).strip()))
+            cap = int(float(row.get("Max", "").strip()))
         except (ValueError, TypeError):
             cap = None
 
@@ -86,6 +110,10 @@ def load_schedule(xlsx_path):
             "time_start": time_start,
             "time_end": time_end,
             "capacity": cap,
+            "course": row.get("Course", "").strip(),
+            "title": row.get("Title", "").strip(),
+            "instructor": row.get("Instructor", "").strip(),
+            "term": row.get("Term", "").strip(),
         })
 
     return results
@@ -95,12 +123,14 @@ def _time_to_minutes(t):
     return t.hour * 60 + t.minute
 
 
-def get_empty_rooms(schedule, weekday, now, building=None, min_duration_mins=0):
+def get_empty_rooms(schedule, weekday, now, building=None, min_duration_mins=0, until=None):
     """
     Return all rooms currently empty as of (weekday, now).
     Each result: {"building", "room", "minutes_until_next"} (minutes is int or None).
     Sorted by building, then room. Optional building filter.
     min_duration_mins: skip rooms whose next class starts sooner than this many minutes.
+    until: when given, a room only counts as empty if it stays free for the
+    entire [now, until) window (class boundaries touching the window are fine).
     """
     # Collect all unique rooms and their classes for today
     all_rooms = {}  # (building, room) -> [today's class entries]
@@ -112,16 +142,25 @@ def get_empty_rooms(schedule, weekday, now, building=None, min_duration_mins=0):
             all_rooms[key].append(entry)
 
     now_min = _time_to_minutes(now)
+    until_min = _time_to_minutes(until) if until is not None else None
     results = []
 
     for (bldg, room), today_classes in all_rooms.items():
         if building and bldg != building:
             continue
 
-        occupied = any(
-            _time_to_minutes(c["time_start"]) <= now_min < _time_to_minutes(c["time_end"])
-            for c in today_classes
-        )
+        if until_min is not None and until_min > now_min:
+            # Window mode: any class overlapping [now, until) makes it busy
+            occupied = any(
+                _time_to_minutes(c["time_start"]) < until_min
+                and _time_to_minutes(c["time_end"]) > now_min
+                for c in today_classes
+            )
+        else:
+            occupied = any(
+                _time_to_minutes(c["time_start"]) <= now_min < _time_to_minutes(c["time_end"])
+                for c in today_classes
+            )
         if occupied:
             continue
 

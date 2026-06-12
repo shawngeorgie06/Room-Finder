@@ -18,7 +18,9 @@ Live at: [https://room-finder.onrender.com](https://room-finder.onrender.com) *(
 **Planning Ahead**
 - Day override — check any day of the week (Mon–Sun)
 - Time override — see which rooms will be free at a specific time
+- "Free during my gap" — find rooms free for an entire time window (Find a Room modal)
 - Next free slot — room detail shows when an occupied room opens up
+- Weekly busyness heatmap per building — see which hours are quiet
 - Future day + time combos fully supported
 
 **Navigation**
@@ -33,17 +35,21 @@ Live at: [https://room-finder.onrender.com](https://room-finder.onrender.com) *(
 - Configurable "closing soon" threshold (15 / 30 / 45 / 60 min)
 - "Best Rooms Right Now" — top rooms sorted by free time, on dashboard and sidebar
 - Mobile bottom nav with search overlay and room detail bottom sheet
+- Installable PWA — add to home screen, works offline with last-known data
+- Pin favorite rooms (★ on any room card) — pinned rooms sort first
 - Weekend / no-classes banner when campus is quiet
-- Semester label auto-detected from filename, falls back to current date
+- Room detail shows the course, title, and instructor for each class block
+- Semester auto-detected from the data's Term column; a warning banner appears
+  when the loaded schedule is from a past semester
 
 ---
 
 ## Stack
 
-- **Backend**: Python 3.10+, Flask, Pandas
-- **Frontend**: Vanilla JS, Tailwind CSS (CDN), Leaflet.js
+- **Backend**: Python 3.10+, Flask (stdlib `csv` + openpyxl for parsing — no pandas)
+- **Frontend**: Vanilla JS, Tailwind CSS (prebuilt at `static/tailwind.css`), Leaflet.js
 - **Data**: NJIT Banner SSB course schedule export (CSV or XLSX)
-- **Deploy**: Render (gunicorn)
+- **Deploy**: Render (gunicorn, single worker — uploads mutate in-process state)
 
 ---
 
@@ -55,7 +61,23 @@ python app.py
 # → http://localhost:5000
 ```
 
-On first run the app loads `schedule_default.csv` from the project root. Upload a current semester schedule via the **Settings** page in the UI (no restart needed).
+Schedules are stored **one file per term** (`uploaded_schedule_<term>.csv`), so
+semesters coexist — you can upload Fall while Summer is still running. The app
+activates the best term for today: the current semester if available, else the
+nearest upcoming one, else the most recent past one (with a stale-data warning).
+It re-checks on schedule-info requests, so a long-running server switches terms
+automatically when a semester begins. Files that parse to zero entries are
+skipped. Upload via the **Settings** page in the UI (no restart needed).
+
+### Rebuilding the CSS
+
+Tailwind is compiled ahead of time (no CDN). After changing classes in
+`templates/` or `static/app.js`:
+
+```bash
+npm install        # once
+npm run build:css  # regenerates static/tailwind.css
+```
 
 ---
 
@@ -68,23 +90,28 @@ On first run the app loads `schedule_default.csv` from the project root. Upload 
 3. The schedule reloads instantly — no restart needed
 4. The uploaded file persists across restarts as `uploaded_schedule.csv/xlsx`
 
-**Option 2 — Bookmarklet**
+**Option 2 — Bookmarklet (one click, auto-uploads)**
 
-1. Go to `/bookmarklet` in the app (linked from the Settings page)
+1. Go to `/bookmarklet` **on the deployed app** (the app's origin is baked into
+   the bookmarklet at install time — installing from localhost targets localhost)
 2. Drag the **Extract NJIT Schedule** button to your bookmarks bar
 3. Log in to [Banner Course Schedule](https://generalssb-prod.ec.njit.edu/BannerExtensibility/customPage/page/stuRegCrseSched)
 4. Select the current term, wait for the page to load
-5. Click the bookmarklet — downloads a combined CSV
-6. Upload via the Settings page — updates instantly, no restart needed
+5. Click the bookmarklet — it extracts all sections and **uploads them straight
+   to the app**. If `UPLOAD_PASSWORD` is set you're prompted once (remembered).
+   If the upload fails, the CSV downloads as a fallback for manual upload.
 
 ---
 
 ## API
 
-All endpoints support optional query params: `?at=HH:MM`, `?day=Monday`, `?for=30`, `?building=KUPF`
+All endpoints support optional query params: `?at=HH:MM`, `?day=Monday`, `?for=30`, `?building=KUPF`.
+`/api/rooms` also accepts `?until=HH:MM` — only rooms free for the entire `[at, until)` window.
 
 ```
 GET /api/rooms                  # Empty rooms right now
+GET /api/heatmap                # Weekly per-hour busyness for one building
+  ?building=CKB
 GET /api/rooms/all              # All rooms (empty + occupied) with status
 GET /api/buildings              # Per-building occupancy summary
 GET /api/room/schedule          # One room's full day schedule
@@ -132,7 +159,7 @@ njit-empty-rooms/
 
 ```bash
 python -m pytest tests/ -v
-# 45 tests, all passing
+# 75 tests, all passing
 ```
 
 ---

@@ -2,18 +2,23 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
-package.json
 start.cmd
 start.sh
 
-# Schedule data — not committed, regenerate via bookmarklet each semester
+# Node — only needed to rebuild static/tailwind.css
+node_modules/
+
+# Schedule data — mostly runtime artifacts, except committed term exports
 *.csv
 *.xlsx
-# Exception: default schedule ships with the app so Render always has data
+# Exceptions: these ship with the app so Render always has data after a deploy.
+# Render's free-tier disk is ephemeral — an uploaded schedule vanishes on the
+# next deploy, so commit each semester's Course_Schedule_<term>.csv here.
 !schedule_default.csv
+!Course_Schedule_*.csv
 
 # Logs — may contain local paths / stack traces
 *.log
 
-# Uploaded schedule (written at runtime by /api/upload-schedule)
-uploaded_schedule.csv
+# Uploaded schedules (written at runtime by /api/upload-schedule, one per term)
+uploaded_schedule*

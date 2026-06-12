@@ -187,13 +187,16 @@
         <div class="step">
           <div class="step-num">4</div>
           <div class="step-text">
-            Click the <strong>bookmarklet</strong> in your bookmarks bar. A progress overlay will appear while it fetches all subjects (~60–90 seconds). A CSV file will download automatically.
+            Click the <strong>bookmarklet</strong> in your bookmarks bar. A progress overlay will appear while it fetches all subjects (~60–90 seconds).
           </div>
         </div>
         <div class="step">
           <div class="step-num">5</div>
           <div class="step-text">
-            Go to the <strong><a href="/?view=settings" target="_blank">Settings page</a></strong> in the app, upload the downloaded CSV, and the schedule updates instantly — no restart needed.
+            That's it — the schedule is <strong>uploaded to the app automatically</strong>.
+            If the app has an admin password set, you'll be asked for it once (it's remembered after that).
+            If the upload can't reach the app, the CSV downloads instead and you can add it manually via the
+            <strong><a href="/?view=settings" target="_blank">Settings page</a></strong>.
           </div>
         </div>
       </div>
@@ -323,7 +326,7 @@ if(!allRows.length){
   return;
 }
 
-/* ── 6. Build + download CSV ── */
+/* ── 6. Build CSV ── */
 const sample=allRows[0];
 console.log("Sample row fields:",Object.keys(sample));
 console.log("Sample:",JSON.stringify(sample).slice(0,400));
@@ -336,12 +339,46 @@ function toCSV(row){
 }
 const csv=[HEADERS.join(","),...allRows.map(toCSV)].join("\\n");
 const fname="Course_Schedule_"+term+".csv";
-const blob=new Blob(["\\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
-const url=URL.createObjectURL(blob);
-const a=document.createElement("a");a.href=url;a.download=fname;
-document.body.appendChild(a);a.click();document.body.removeChild(a);
-URL.revokeObjectURL(url);
-alert("Done! "+fname+"\\n"+allRows.length+" sections from "+(subjects.length-missing.length)+" subjects."+(missing.length?"\\n\\nMissed: "+missing.join(", "):""));
+const summary=allRows.length+" sections from "+(subjects.length-missing.length)+" subjects."+(missing.length?"\\nMissed: "+missing.join(", "):"");
+
+/* ── 7. Upload to Room Finder (download as fallback) ── */
+const APP="${location.origin}";
+const PWKEY="njitRoomFinderUploadPw";
+function download(){
+  const blob=new Blob(["\\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");a.href=url;a.download=fname;
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function doUpload(pw){
+  const fd=new FormData();
+  fd.append("file",new Blob(["\\uFEFF"+csv],{type:"text/csv"}),fname);
+  if(pw)fd.append("password",pw);
+  return fetch(APP+"/api/upload-schedule",{method:"POST",body:fd});
+}
+try{
+  let pw=localStorage.getItem(PWKEY)||"";
+  let resp=await doUpload(pw);
+  if(resp.status===401){
+    localStorage.removeItem(PWKEY);
+    pw=prompt("Room Finder admin password (to update "+APP+"):")||"";
+    if(pw)resp=await doUpload(pw);
+  }
+  if(resp.ok){
+    if(pw)localStorage.setItem(PWKEY,pw);
+    const d=await resp.json().catch(()=>({}));
+    const note=(d.uploaded_semester&&d.active_semester&&d.uploaded_semester!==d.active_semester)?"\\n\\nSaved "+d.uploaded_semester+" — the app currently shows "+d.active_semester+" and will switch automatically when the semester starts.":"";
+    alert("Room Finder updated!\\n"+summary+"\\nEntries: "+(d.entries!=null?d.entries:"?")+note);
+    return;
+  }
+  const err=await resp.json().catch(()=>({}));
+  alert("Upload to "+APP+" failed ("+resp.status+"): "+(err.error||"unknown error")+"\\n\\nDownloading the CSV instead — upload it manually via Settings.");
+}catch(e){
+  alert("Could not reach "+APP+" — downloading the CSV instead.\\n("+e+")");
+}
+download();
+alert("Downloaded "+fname+"\\n"+summary);
 })();`;
 
     document.getElementById('bm-link').href = 'javascript:' + encodeURIComponent(src);

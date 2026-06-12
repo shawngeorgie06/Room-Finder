@@ -40,11 +40,14 @@ class TestParseDays:
     def test_saturday(self):
         assert parse_days("S") == [5]
 
+    def test_sunday(self):
+        assert parse_days("U") == [6]
+
     def test_all_days(self):
-        assert parse_days("MTWRFS") == [0, 1, 2, 3, 4, 5]
+        assert parse_days("MTWRFSU") == [0, 1, 2, 3, 4, 5, 6]
 
     def test_unknown_code_skipped(self):
-        assert parse_days("MU") == [0]
+        assert parse_days("MX") == [0]
 
 
 class TestParseLocation:
@@ -95,13 +98,37 @@ class TestLoadSchedule:
             assert entry["building"].strip() != ""
             assert entry["room"].strip() != ""
 
+    def test_includes_course_metadata(self, tmp_path):
+        csv_file = tmp_path / "sched.csv"
+        csv_file.write_text(
+            "Term,Course,Title,Section,CRN,Days,Times,Location,Status,Max,Now,Instructor,Delivery Mode\n"
+            "202650,CS 113,Intro to Computer Science,002,12345,MW,1:00 PM - 2:20 PM,KUPF 207,Open,40,35,Smith John,Face-to-Face\n"
+        )
+        result = load_schedule(str(csv_file))
+        assert len(result) == 1
+        assert result[0]["course"] == "CS 113"
+        assert result[0]["title"] == "Intro to Computer Science"
+        assert result[0]["instructor"] == "Smith John"
+        assert result[0]["term"] == "202650"
+
+    def test_course_metadata_blank_when_missing(self, tmp_path):
+        csv_file = tmp_path / "sched.csv"
+        csv_file.write_text(
+            "Days,Times,Location,Max,Delivery Mode\n"
+            "MW,1:00 PM - 2:20 PM,KUPF 207,40,Face-to-Face\n"
+        )
+        result = load_schedule(str(csv_file))
+        assert result[0]["course"] == ""
+        assert result[0]["title"] == ""
+        assert result[0]["instructor"] == ""
+
     def test_all_days_are_valid_weekday_ints(self):
         if not os.path.exists(self._xlsx()):
             pytest.skip("Excel file not present")
         result = load_schedule(self._xlsx())
         for entry in result:
             for d in entry["days"]:
-                assert 0 <= d <= 5
+                assert 0 <= d <= 6
 
 
 from schedule import get_empty_rooms

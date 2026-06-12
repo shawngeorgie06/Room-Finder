@@ -38,7 +38,30 @@ const state = {
   allRoomsCache: [],   // full roster including occupied rooms
   mapFloor: 1,
   floorRoomsData: [],
+  lastRoomsData: [],   // most recent /api/rooms result, for pin re-renders
 };
+
+// ── Pinned rooms (localStorage) ─────────────────────────────────────────────
+function getPins() {
+  try { return JSON.parse(localStorage.getItem('pinnedRooms') || '[]'); }
+  catch (e) { return []; }
+}
+function isPinned(b, r) { return getPins().includes(`${b}|${r}`); }
+function togglePin(b, r) {
+  const key = `${b}|${r}`;
+  let pins = getPins();
+  pins = pins.includes(key) ? pins.filter(p => p !== key) : [...pins, key];
+  localStorage.setItem('pinnedRooms', JSON.stringify(pins));
+  if (state.lastRoomsData.length) {
+    renderDashRooms(state.lastRoomsData);
+    renderRoomsGrid(state.lastRoomsData);
+  }
+}
+function pinSort(rooms) {
+  // Stable sort: pinned rooms float to the top, original order kept otherwise
+  return [...rooms].sort((a, b) =>
+    isPinned(b.building, b.room) - isPinned(a.building, a.room));
+}
 
 // ── URL state sync ─────────────────────────────────────────────────────────
 function syncURL() {
@@ -107,6 +130,7 @@ function copyShareLink() {
 // ── Helpers ────────────────────────────────────────────────────────────────
 function $(id) { return document.getElementById(id); }
 function setText(id, val) { const e = $(id); if (e) e.textContent = val; }
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
 
 function formatTime(minutes) {
   if (minutes === null || minutes === undefined) return 'FREE ALL DAY';
@@ -220,6 +244,7 @@ async function fetchRooms() {
     if (!state.building && !state.timeAt && !state.timeFor && !state.dayAt) state.allRoomsData = data;
     // Free all day filter
     if (state.freeAllDay) data = data.filter(r => r.minutes_until_next === null);
+    state.lastRoomsData = data;
     renderLiveFeed(data);
     renderDashRooms(data);
     renderRoomsTable(data);
@@ -470,11 +495,18 @@ function renderDashRooms(rooms) {
   const container = $('dash-rooms');
   if (!container) return;
   container.textContent = '';
-  rooms.slice(0, 12).forEach(room => {
+  pinSort(rooms).slice(0, 12).forEach(room => {
     const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
     const color = isSoon ? '#f59e0b' : '#3fff8b';
     const cell = document.createElement('div');
-    cell.style.cssText = `background:${color}10;border:1px solid ${color}30;padding:8px;border-radius:2px;cursor:pointer;transition:background 0.15s`;
+    cell.style.cssText = `background:${color}10;border:1px solid ${color}30;padding:8px;border-radius:2px;cursor:pointer;transition:background 0.15s;position:relative`;
+    const pinned = isPinned(room.building, room.room);
+    const pin = document.createElement('span');
+    pin.textContent = pinned ? '★' : '☆';
+    pin.title = pinned ? 'Unpin' : 'Pin to top';
+    pin.style.cssText = `position:absolute;top:4px;right:6px;font-size:11px;cursor:pointer;color:${pinned ? '#3fff8b' : '#484847'};z-index:2;line-height:1`;
+    pin.onclick = e => { e.stopPropagation(); togglePin(room.building, room.room); };
+    cell.appendChild(pin);
     cell.title = `${room.building}-${room.room} · tap for schedule`;
     cell.onclick = () => openRoomDetail(room.building, room.room);
     cell.onmouseover = () => { cell.style.background = `${color}20`; };
@@ -597,10 +629,11 @@ function renderRoomsGrid(rooms) {
   }
 
   const frag = document.createDocumentFragment();
-  rooms.forEach((room, i) => {
+  pinSort(rooms).forEach((room, i) => {
     const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
     const color = isSoon ? '#f59e0b' : '#3fff8b';
     const border = isSoon ? 'rgba(245,158,11,0.2)' : 'rgba(63,255,139,0.1)';
+    const pinned = isPinned(room.building, room.room);
     const card = document.createElement('div');
     card.className = 'room-card-in';
     card.style.cssText = `background:linear-gradient(135deg,rgba(26,25,25,0.8),rgba(14,14,14,0.95));border:1px solid ${border};padding:14px;border-radius:2px;position:relative;overflow:hidden;transition:border-color 0.2s,background 0.2s;cursor:pointer;animation-delay:${Math.min(i,30)*22}ms`;
@@ -615,7 +648,12 @@ function renderRoomsGrid(rooms) {
       <div style="position:absolute;top:0;left:0;right:0;height:2px;background:${color};opacity:0.6"></div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
         <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:600;color:#767575;letter-spacing:0.15em;text-transform:uppercase">${room.building}</span>
-        ${typeLabel}
+        <div style="display:flex;align-items:center;gap:6px">
+          ${typeLabel}
+          <span onclick="event.stopPropagation();togglePin('${room.building}','${room.room}')"
+                title="${pinned ? 'Unpin' : 'Pin to top'}"
+                style="font-size:12px;cursor:pointer;color:${pinned ? '#3fff8b' : '#484847'};line-height:1">${pinned ? '★' : '☆'}</span>
+        </div>
       </div>
       <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:12px">
         <span style="font-family:'Space Grotesk',sans-serif;font-size:26px;font-weight:800;color:#fff;letter-spacing:0.05em">${room.room}</span>
@@ -741,6 +779,7 @@ function openBuildingPanel(buildingData) {
     const ft = $('floor-tabs'); if (ft) ft.innerHTML = '';
     const fw = $('floor-tabs-wrap'); if (fw) fw.style.display = 'none';
     const sw = $('panel-search-wrap'); if (sw) sw.style.display = 'none';
+    const hw = $('panel-heatmap-wrap'); if (hw) hw.style.display = 'none';
     const fc = $('floor-rooms');
     if (fc) {
       fc.innerHTML = `<div style="padding:32px 16px;text-align:center;grid-column:1/-1">
@@ -757,7 +796,9 @@ function openBuildingPanel(buildingData) {
   // Restore sections
   const fw = $('floor-tabs-wrap'); if (fw) fw.style.display = '';
   const sw = $('panel-search-wrap'); if (sw) sw.style.display = '';
+  const hw = $('panel-heatmap-wrap'); if (hw) hw.style.display = '';
   if ($('panel-search')) $('panel-search').value = '';
+  renderHeatmap(buildingData.building);
 
   // Loading state
   const fc = $('floor-rooms');
@@ -781,6 +822,40 @@ function openBuildingPanel(buildingData) {
 function closeFloorPanel() {
   const panel = $('floor-panel');
   if (panel) panel.style.transform = 'translateX(100%)';
+}
+
+// ── Weekly busyness heatmap (building panel) ────────────────────────────────
+function renderHeatmap(building) {
+  const wrap = $('panel-heatmap');
+  if (!wrap) return;
+  wrap.innerHTML = `<div style="font-size:9px;color:#767575;font-family:'Space Grotesk',sans-serif;text-transform:uppercase">Loading…</div>`;
+  fetch('/api/heatmap?building=' + encodeURIComponent(building))
+    .then(r => r.json())
+    .then(d => {
+      if (!d.days) { wrap.innerHTML = ''; return; }
+      const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      const hourLabel = h => (h % 12 || 12) + (h < 12 ? 'a' : 'p');
+      let html = `<div style="display:grid;grid-template-columns:26px repeat(${d.hours.length},1fr);gap:2px;align-items:center">`;
+      html += '<div></div>' + d.hours.map(h => {
+        const lbl = [7, 12, 17, 21].includes(h) ? hourLabel(h) : '';
+        return `<div style="font-size:7px;color:#767575;text-align:center;font-family:monospace">${lbl}</div>`;
+      }).join('');
+      d.days.forEach((counts, di) => {
+        // Hide weekend rows with zero classes — most buildings are quiet then
+        if (di >= 5 && counts.every(c => c === 0)) return;
+        html += `<div style="font-size:8px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-weight:700">${DAY_LABELS[di]}</div>`;
+        html += counts.map((c, hi) => {
+          const pct = d.total_rooms ? c / d.total_rooms : 0;
+          const bg = pct === 0 ? 'rgba(63,255,139,0.07)' : `rgba(255,113,102,${(0.15 + 0.75 * pct).toFixed(2)})`;
+          const title = `${DAY_LABELS[di]} ${hourLabel(d.hours[hi])}: ${c}/${d.total_rooms} rooms busy`;
+          return `<div class="heatmap-cell" title="${title}" style="height:12px;border-radius:1px;background:${bg}"></div>`;
+        }).join('');
+      });
+      html += '</div>';
+      html += `<div style="display:flex;justify-content:space-between;margin-top:6px;font-size:8px;color:#767575;font-family:'Space Grotesk',sans-serif"><span>■ quiet</span><span style="color:#ff7166">■ busy</span></div>`;
+      wrap.innerHTML = html;
+    })
+    .catch(() => { wrap.innerHTML = ''; });
 }
 
 function buildFloorTabs(floors, rooms) {
@@ -1090,7 +1165,8 @@ function renderRoomDetail(data) {
   let prev = DAY_START;
   data.classes.forEach(cls => {
     if (cls.start_min > prev) slots.push({ type:'free', start:prev, end:cls.start_min });
-    slots.push({ type:'class', start:cls.start_min, end:cls.end_min, isCurrent:cls.is_current });
+    slots.push({ type:'class', start:cls.start_min, end:cls.end_min, isCurrent:cls.is_current,
+                 course:cls.course, title:cls.title, instructor:cls.instructor });
     prev = cls.end_min;
   });
   if (prev < DAY_END) slots.push({ type:'free', start:prev, end:DAY_END });
@@ -1106,11 +1182,16 @@ function renderRoomDetail(data) {
 
     if (slot.type === 'class') {
       row.style.cssText = `display:flex;align-items:center;gap:12px;padding:11px 14px;background:${slot.isCurrent?'rgba(255,113,102,0.08)':'rgba(255,255,255,0.03)'};border:1px solid ${slot.isCurrent?'rgba(255,113,102,0.3)':'rgba(255,255,255,0.07)'};border-radius:2px`;
+      const courseLabel = slot.course
+        ? `${esc(slot.course)}${slot.title ? ' · ' + esc(slot.title) : ''}`
+        : '';
       row.innerHTML = `
         <div style="width:3px;align-self:stretch;background:#ff7166;border-radius:2px;flex-shrink:0"></div>
         <div style="flex:1;min-width:0">
           <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:700;color:${slot.isCurrent?'#ff7166':'#767575'};text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px">${slot.isCurrent?'● In session':'Class'}</div>
           <div style="font-family:'Space Grotesk',sans-serif;font-size:13px;color:#fff">${minToTime(slot.start)} – ${minToTime(slot.end)}</div>
+          ${courseLabel ? `<div style="font-family:'Space Grotesk',sans-serif;font-size:11px;color:#adaaaa;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${courseLabel}</div>` : ''}
+          ${slot.instructor ? `<div style="font-family:'Manrope',sans-serif;font-size:10px;color:#767575;margin-top:1px">${esc(slot.instructor)}</div>` : ''}
         </div>
         <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;color:#767575;flex-shrink:0">${durStr}</div>`;
     } else {
@@ -1169,6 +1250,44 @@ function openFindRoom() {
 function closeFindRoom() {
   const modal = $('find-room-modal');
   if (modal) modal.classList.add('hidden');
+}
+
+// ── Gap window: rooms free for an entire time range ─────────────────────────
+function applyGapWindow() {
+  const from  = ($('fr-gap-from')  || {}).value || '';
+  const until = ($('fr-gap-until') || {}).value || '';
+  if (!until) { if ($('fr-gap-until')) $('fr-gap-until').focus(); return; }
+
+  const params = new URLSearchParams();
+  if (from) params.set('at', from);
+  params.set('until', until);
+  if (state.dayAt) params.set('day', state.dayAt);
+
+  const res = $('fr-results');
+  if (res) res.innerHTML = `<div style="text-align:center;padding:40px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase">Searching…</div>`;
+
+  fetch('/api/rooms?' + params.toString())
+    .then(r => r.json())
+    .then(data => {
+      renderFindRoom(data);
+      const lbl = $('fr-gap-label');
+      if (lbl) {
+        lbl.textContent = `${data.length} room${data.length !== 1 ? 's' : ''} free for the whole ${from || 'now'}–${until} window`;
+        lbl.classList.remove('hidden');
+      }
+      const clear = $('fr-gap-clear');
+      if (clear) clear.classList.remove('hidden');
+    })
+    .catch(() => { if (res) res.innerHTML = `<div style="color:#ff7166;text-align:center;padding:40px;font-size:11px">Error loading rooms.</div>`; });
+}
+
+function clearGapWindow() {
+  ['fr-gap-from', 'fr-gap-until'].forEach(id => { const e = $(id); if (e) e.value = ''; });
+  const lbl = $('fr-gap-label');
+  if (lbl) lbl.classList.add('hidden');
+  const clear = $('fr-gap-clear');
+  if (clear) clear.classList.add('hidden');
+  renderFindRoom(state.allRoomsData);
 }
 
 function renderFindRoom(rooms) {
@@ -1268,6 +1387,29 @@ async function fetchSemesterLabel() {
     setText('dash-semester',    `${sem} · Auto-refresh 60s`);
     setText('footer-semester',  sem);
     setText('rooms-view-semester', `LIVE · ${sem}`);
+
+    // Data-freshness banners: red warning for stale (past) data,
+    // amber/blue notice for future-semester data
+    const status = d.status || (d.stale === true ? 'stale' : 'current');
+    const staleBanner  = $('stale-data-banner');
+    const futureBanner = $('future-data-banner');
+    if (staleBanner) {
+      if (status === 'stale') {
+        setText('stale-banner-loaded',   d.semester || 'an older semester');
+        setText('stale-banner-expected', d.expected_semester || 'now');
+        staleBanner.classList.remove('hidden');
+      } else {
+        staleBanner.classList.add('hidden');
+      }
+    }
+    if (futureBanner) {
+      if (status === 'future') {
+        setText('future-banner-loaded', d.semester || 'an upcoming semester');
+        futureBanner.classList.remove('hidden');
+      } else {
+        futureBanner.classList.add('hidden');
+      }
+    }
   } catch(e) { /* non-critical */ }
 }
 
@@ -1321,6 +1463,11 @@ async function init() {
   initDashMap(); // init dashboard map after data is loaded
   fetchSemesterLabel();
   setInterval(scheduledRefresh, REFRESH_INTERVAL_MS);
+
+  // PWA: offline shell + add-to-home-screen
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
 }
 
 init();

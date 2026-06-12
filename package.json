@@ -1,0 +1,12 @@
+{
+  "name": "njit-empty-rooms",
+  "scripts": {
+    "start": "python app.py",
+    "build:css": "tailwindcss -c tailwind.config.js -i tailwind.src.css -o static/tailwind.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/container-queries": "^0.1.1",
+    "@tailwindcss/forms": "^0.5.7",
+    "tailwindcss": "^3.4.0"
+  }
+}
