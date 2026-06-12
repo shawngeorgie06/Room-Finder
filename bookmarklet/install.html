@@ -249,6 +249,7 @@ console.log("Subjects ("+subjects.length+"):",subjects);
 /* ── 3. XHR interceptor — piggybacks on Banner's own authenticated requests ── */
 const captured={};
 let currentSubj=null;
+let currentCourse=null;
 let resolveCapture=null;
 const origOpen=XMLHttpRequest.prototype.open;
 const origSend=XMLHttpRequest.prototype.send;
@@ -261,8 +262,18 @@ XMLHttpRequest.prototype.send=function(...a){
     if(!this.__u.includes("virtualDomains"))return;
     try{
       const d=JSON.parse(this.responseText);
-      const rows=d.data||d.rows||(Array.isArray(d)?d:null);
+      let rows=d.data||d.rows||(Array.isArray(d)?d:null);
       if(!rows||!rows.length)return;
+      /* Banner nests the real section rows inside a SECTIONS_TABLE field */
+      if(rows[0]&&rows[0].SECTIONS_TABLE!==undefined){
+        rows=rows.flatMap(r=>{
+          let t=r.SECTIONS_TABLE;
+          if(typeof t==="string"){try{t=JSON.parse(t)}catch(e){t=null}}
+          return Array.isArray(t)?t:[];
+        });
+        if(rows.length)console.log("Unwrapped SECTIONS_TABLE:",rows.length,"rows, inner keys:",Object.keys(rows[0]));
+        if(!rows.length)return;
+      }
       const keys=Object.keys(rows[0]).map(k=>k.toUpperCase());
       /* Require real section data: a course-catalog response also has COURSE
          but lacks times/rooms, and would poison the export with junk rows */
@@ -270,9 +281,14 @@ XMLHttpRequest.prototype.send=function(...a){
       if(want.filter(k=>keys.includes(k)).length<3){console.log("Skipping non-section XHR, keys:",keys);return;}
       const subj=currentSubj;
       if(subj){
+        /* Nested rows may omit term/course — stamp them from click context */
+        rows.forEach(r=>{
+          if(r.TERM===undefined&&r.TERM_CODE===undefined)r.TERM=term;
+          if(r.COURSE===undefined&&currentCourse)r.COURSE=currentCourse;
+        });
         if(!captured[subj])captured[subj]=[];
         captured[subj].push(...rows);
-        console.log("XHR captured",rows.length,"rows for",subj);
+        console.log("Captured",rows.length,"section rows for",subj);
       }
       if(resolveCapture){resolveCapture();resolveCapture=null;}
     }catch(e){}
@@ -293,31 +309,49 @@ const ps=document.createElement("div");ps.style.cssText="font-size:12px;color:#8
 pb.appendChild(pf);ov.appendChild(pt);ov.appendChild(pb);ov.appendChild(ps);
 document.body.appendChild(ov);
 
-/* ── 5. Click each subject row and capture XHR ── */
+/* ── 5. Click each subject, then each course row (sections load per course) ── */
 const allRows=[];const missing=[];
+function findRow(match){
+  for(const tr of document.querySelectorAll("tr")){
+    const c0=tr.querySelector("td");
+    if(c0&&match(c0.textContent.trim()))return tr;
+  }
+  return null;
+}
+function clickAndWait(el,ms){
+  const p=new Promise(res=>{resolveCapture=res;setTimeout(res,ms);});
+  el.click();
+  return p;
+}
 for(let i=0;i<subjects.length;i++){
   const subj=subjects[i];
   currentSubj=subj;
   pt.textContent="Selecting "+subj+" ("+(i+1)+"/"+subjects.length+")";
-  pf.style.width=Math.round((i+1)/subjects.length*100)+"%";
-  ps.textContent=allRows.length+" sections captured";
+  pf.style.width=Math.round(((i+1)/subjects.length)*100)+"%";
+  ps.textContent=allRows.length+" rows captured";
 
-  // Find the subject row (first <td> equals the subject code)
-  let subjRow=null;
-  for(const tr of document.querySelectorAll("tr")){
-    const cells=[...tr.querySelectorAll("td")];
-    if(cells.length>0&&cells[0].textContent.trim()===subj){subjRow=tr;break;}
-  }
+  const subjRow=findRow(t=>t===subj);
   if(!subjRow){console.warn("Row not found:",subj);missing.push(subj);continue;}
+  currentCourse=null;
+  await clickAndWait(subjRow,2500);
+  await new Promise(r=>setTimeout(r,250));
 
-  // Click and wait up to 3s for XHR data
-  const waitP=new Promise(res=>{resolveCapture=res;setTimeout(res,3000);});
-  subjRow.click();
-  await waitP;
+  /* Course rows render as e.g. "ACCT 615" — click each so its sections load */
+  const courseRows=[];
+  for(const tr of document.querySelectorAll("tr")){
+    const c0=tr.querySelector("td");
+    if(c0&&c0.textContent.trim().indexOf(subj+" ")===0)courseRows.push(tr);
+  }
+  console.log(subj+": "+courseRows.length+" course rows to expand");
+  for(let j=0;j<courseRows.length;j++){
+    ps.textContent=(allRows.length+(captured[subj]?captured[subj].length:0))+" rows · "+subj+" course "+(j+1)+"/"+courseRows.length;
+    currentCourse=courseRows[j].querySelector("td").textContent.trim();
+    await clickAndWait(courseRows[j],1500);
+    await new Promise(r=>setTimeout(r,120));
+  }
 
   if(captured[subj])allRows.push(...captured[subj]);
-  else{console.warn("No XHR data for:",subj);missing.push(subj);}
-  await new Promise(r=>setTimeout(r,150));
+  else{console.warn("No section data for:",subj);missing.push(subj);}
 }
 
 XMLHttpRequest.prototype.open=origOpen;
@@ -325,9 +359,22 @@ XMLHttpRequest.prototype.send=origSend;
 document.body.removeChild(ov);
 
 if(!allRows.length){
-  alert("No data captured.\\n\\nThe subject table rows may not be clickable.\\nTry: select a subject manually, then run the bookmarklet again — check console for 'XHR captured'.");
+  alert("No data captured.\\n\\nCheck the console for 'Skipping non-section XHR' lines and report the keys shown.");
   return;
 }
+
+/* Dedupe: subject + course clicks can deliver the same section twice */
+const seenRow=new Set();
+const dedupedRows=[];
+for(const r of allRows){
+  const k=JSON.stringify(r);
+  if(seenRow.has(k))continue;
+  seenRow.add(k);
+  dedupedRows.push(r);
+}
+console.log("Captured "+allRows.length+" rows, "+dedupedRows.length+" after dedupe");
+allRows.length=0;
+allRows.push(...dedupedRows);
 
 /* ── 6. Build CSV ── */
 const sample=allRows[0];
