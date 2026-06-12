@@ -247,9 +247,38 @@ if(!subjects.length){alert("No subjects found. Select a term and wait for the su
 console.log("Subjects ("+subjects.length+"):",subjects);
 
 /* ── 3. XHR interceptor — piggybacks on Banner's own authenticated requests ── */
+/* Banner returns each subject's sections as rendered HTML in SECTIONS_TABLE:
+   <h4 id="EVSC 306">EVSC 306 - TITLE</h4><table>...section rows...</table>
+   repeated per course. Parse it back into row objects. */
+function parseSectionsHTML(html){
+  const doc=new DOMParser().parseFromString(html,"text/html");
+  const out=[];
+  let course="",title="";
+  for(const el of doc.body.children){
+    if(el.tagName==="H4"){
+      course=(el.getAttribute("id")||el.textContent.split(" - ")[0]||"").trim();
+      const t=el.textContent.trim();
+      const dash=t.indexOf(" - ");
+      title=dash>=0?t.slice(dash+3).trim():"";
+    }else if(el.tagName==="TABLE"){
+      for(const tr of el.querySelectorAll("tr")){
+        const tds=[...tr.querySelectorAll("td")];
+        if(tds.length<12)continue; /* header row is <th>-only */
+        const txt=n=>(tds[n]?tds[n].textContent.trim():"");
+        out.push({
+          TERM:term,COURSE:course,TITLE:title,
+          SECTION:txt(0),CRN:txt(1),DAYS:txt(2),TIMES:txt(3),
+          LOCATION:txt(4),STATUS:txt(5),MAX:txt(6),NOW:txt(7),
+          INSTRUCTOR:txt(8),INSTRUCTION_METHOD:txt(9),
+          CREDITS:txt(10),INFO_LINK:"",COMMENTS:txt(12)
+        });
+      }
+    }
+  }
+  return out;
+}
 const captured={};
 let currentSubj=null;
-let currentCourse=null;
 let resolveCapture=null;
 const origOpen=XMLHttpRequest.prototype.open;
 const origSend=XMLHttpRequest.prototype.send;
@@ -264,14 +293,9 @@ XMLHttpRequest.prototype.send=function(...a){
       const d=JSON.parse(this.responseText);
       let rows=d.data||d.rows||(Array.isArray(d)?d:null);
       if(!rows||!rows.length)return;
-      /* Banner nests the real section rows inside a SECTIONS_TABLE field */
       if(rows[0]&&rows[0].SECTIONS_TABLE!==undefined){
-        rows=rows.flatMap(r=>{
-          let t=r.SECTIONS_TABLE;
-          if(typeof t==="string"){try{t=JSON.parse(t)}catch(e){t=null}}
-          return Array.isArray(t)?t:[];
-        });
-        if(rows.length)console.log("Unwrapped SECTIONS_TABLE:",rows.length,"rows, inner keys:",Object.keys(rows[0]));
+        rows=rows.flatMap(r=>parseSectionsHTML(String(r.SECTIONS_TABLE||"")));
+        if(rows.length)console.log("Parsed",rows.length,"sections from SECTIONS_TABLE HTML");
         if(!rows.length)return;
       }
       const keys=Object.keys(rows[0]).map(k=>k.toUpperCase());
@@ -281,11 +305,6 @@ XMLHttpRequest.prototype.send=function(...a){
       if(want.filter(k=>keys.includes(k)).length<3){console.log("Skipping non-section XHR, keys:",keys);return;}
       const subj=currentSubj;
       if(subj){
-        /* Nested rows may omit term/course — stamp them from click context */
-        rows.forEach(r=>{
-          if(r.TERM===undefined&&r.TERM_CODE===undefined)r.TERM=term;
-          if(r.COURSE===undefined&&currentCourse)r.COURSE=currentCourse;
-        });
         if(!captured[subj])captured[subj]=[];
         captured[subj].push(...rows);
         console.log("Captured",rows.length,"section rows for",subj);
@@ -309,7 +328,7 @@ const ps=document.createElement("div");ps.style.cssText="font-size:12px;color:#8
 pb.appendChild(pf);ov.appendChild(pt);ov.appendChild(pb);ov.appendChild(ps);
 document.body.appendChild(ov);
 
-/* ── 5. Click each subject, then each course row (sections load per course) ── */
+/* ── 5. Click each subject — its SECTIONS_TABLE HTML has every course's sections ── */
 const allRows=[];const missing=[];
 function findRow(match){
   for(const tr of document.querySelectorAll("tr")){
@@ -326,29 +345,14 @@ function clickAndWait(el,ms){
 for(let i=0;i<subjects.length;i++){
   const subj=subjects[i];
   currentSubj=subj;
-  pt.textContent="Selecting "+subj+" ("+(i+1)+"/"+subjects.length+")";
+  pt.textContent="Extracting "+subj+" ("+(i+1)+"/"+subjects.length+")";
   pf.style.width=Math.round(((i+1)/subjects.length)*100)+"%";
-  ps.textContent=allRows.length+" rows captured";
+  ps.textContent=allRows.length+" sections so far";
 
   const subjRow=findRow(t=>t===subj);
   if(!subjRow){console.warn("Row not found:",subj);missing.push(subj);continue;}
-  currentCourse=null;
-  await clickAndWait(subjRow,2500);
-  await new Promise(r=>setTimeout(r,250));
-
-  /* Course rows render as e.g. "ACCT 615" — click each so its sections load */
-  const courseRows=[];
-  for(const tr of document.querySelectorAll("tr")){
-    const c0=tr.querySelector("td");
-    if(c0&&c0.textContent.trim().indexOf(subj+" ")===0)courseRows.push(tr);
-  }
-  console.log(subj+": "+courseRows.length+" course rows to expand");
-  for(let j=0;j<courseRows.length;j++){
-    ps.textContent=(allRows.length+(captured[subj]?captured[subj].length:0))+" rows · "+subj+" course "+(j+1)+"/"+courseRows.length;
-    currentCourse=courseRows[j].querySelector("td").textContent.trim();
-    await clickAndWait(courseRows[j],1500);
-    await new Promise(r=>setTimeout(r,120));
-  }
+  await clickAndWait(subjRow,3000);
+  await new Promise(r=>setTimeout(r,150));
 
   if(captured[subj])allRows.push(...captured[subj]);
   else{console.warn("No section data for:",subj);missing.push(subj);}
