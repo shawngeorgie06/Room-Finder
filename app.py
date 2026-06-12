@@ -2,7 +2,7 @@ import os
 import threading
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from schedule import load_schedule, get_empty_rooms
@@ -98,6 +98,25 @@ def _schedule_status(term_code, today):
     return 'stale' if term_code < expected else 'future'
 
 
+def _in_session(term_code, today):
+    """Whether classes for this term are actually meeting on `today`.
+    Approximate NJIT windows: Spring Jan 15–May 15, Summer May 15–Aug 15,
+    Fall Sep 1–Dec 23. Outside the window the weekly pattern doesn't apply
+    (breaks, finals aftermath). None when the term is unknown."""
+    if term_code is None:
+        return None
+    year, code = divmod(term_code, 100)
+    windows = {
+        10: (date(year, 1, 15), date(year, 5, 15)),
+        50: (date(year, 5, 15), date(year, 8, 15)),
+        90: (date(year, 9, 1), date(year, 12, 23)),
+    }
+    window = windows.get(code)
+    if window is None:
+        return None
+    return window[0] <= today <= window[1]
+
+
 def _term_from_entries(entries):
     """Most common term code in the loaded data (e.g. 202610), or None."""
     from collections import Counter
@@ -148,6 +167,22 @@ def _default_schedule_candidates(folder, today=None):
     if os.path.exists(os.path.join(folder, 'schedule_default.csv')):
         candidates.append('schedule_default.csv')
     return candidates
+
+
+def _stored_term_files(folder):
+    """Map of term_code -> (filename, source) for term files on disk.
+    Runtime uploads shadow bundled repo exports for the same term."""
+    import glob
+    out = {}
+    for pattern, source in (('Course_Schedule_*', 'bundled'),
+                            ('uploaded_schedule_*', 'uploaded')):
+        for ext in ('.csv', '.xlsx'):
+            for p in glob.glob(os.path.join(folder, pattern + ext)):
+                name = os.path.basename(p)
+                term = _term_code_from_filename(name)
+                if term:
+                    out[term] = (name, source)
+    return out
 
 
 def _load_best_schedule():
@@ -514,6 +549,38 @@ def create_app(schedule=None):
             'days': days,
         })
 
+    @app.route("/api/terms")
+    def terms_api():
+        """All semesters stored on disk, newest first."""
+        today = datetime.now(EASTERN).date()
+        return jsonify([
+            {'term': t, 'semester': _term_label(t), 'filename': fn,
+             'source': src, 'active': fn == meta['filename'],
+             'status': _schedule_status(t, today)}
+            for t, (fn, src) in sorted(_stored_term_files(UPLOAD_FOLDER).items(),
+                                       reverse=True)
+        ])
+
+    @app.route("/api/export-schedule")
+    def export_schedule():
+        """Download a stored term's schedule file — lets an admin save a
+        runtime upload into the repo so it survives Render redeploys."""
+        required_pw = os.environ.get('UPLOAD_PASSWORD', '').strip()
+        if required_pw and request.args.get('password', '').strip() != required_pw:
+            return jsonify({'error': 'Invalid password.'}), 401
+        term_str = request.args.get('term', '').strip()
+        if not term_str.isdigit():
+            return jsonify({'error': 'term is required, e.g. ?term=202650'}), 400
+        entry = _stored_term_files(UPLOAD_FOLDER).get(int(term_str))
+        if not entry:
+            return jsonify({'error': f'No stored schedule for term {term_str}.'}), 404
+        filename = entry[0]
+        ext = os.path.splitext(filename)[1]
+        return send_from_directory(
+            UPLOAD_FOLDER, filename, as_attachment=True,
+            download_name=f'Course_Schedule_{term_str}{ext}'
+        )
+
     @app.route("/api/schedule-info")
     def schedule_info():
         if auto_loaded:
@@ -533,6 +600,7 @@ def create_app(schedule=None):
             'semester': _term_label(term),
             'stale': _is_stale(term, today),
             'status': _schedule_status(term, today),
+            'in_session': _in_session(term, today),
             'expected_semester': _term_label(_expected_term(today)),
             'has_classes_today': has_classes_today,
         })

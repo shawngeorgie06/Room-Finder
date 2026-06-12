@@ -112,6 +112,9 @@ All endpoints support optional query params: `?at=HH:MM`, `?day=Monday`, `?for=3
 GET /api/rooms                  # Empty rooms right now
 GET /api/heatmap                # Weekly per-hour busyness for one building
   ?building=CKB
+GET /api/terms                  # Semesters stored on disk (term, source, active)
+GET /api/export-schedule        # Download a stored term's CSV (admin)
+  ?term=202650&password=...
 GET /api/rooms/all              # All rooms (empty + occupied) with status
 GET /api/buildings              # Per-building occupancy summary
 GET /api/room/schedule          # One room's full day schedule

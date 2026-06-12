@@ -174,13 +174,13 @@
     </button>
   </div>
 
-  <!-- Future-semester notice (shown when loaded data is for an upcoming term) -->
+  <!-- Informational notice: future-semester data, or campus between sessions -->
   <div id="future-data-banner" class="hidden mx-4 md:mx-8 mt-4 px-4 py-3 bg-tertiary/10 border border-tertiary/30 rounded-sm flex items-center gap-3">
     <span class="material-symbols-outlined text-tertiary text-xl">event_upcoming</span>
     <div class="flex-1 min-w-0">
-      <div class="text-xs font-headline font-bold text-white">Showing <span id="future-banner-loaded">an upcoming semester</span></div>
-      <div class="text-[10px] text-on-surface-variant font-label mt-0.5">
-        That semester hasn't started yet — today's availability reflects its class pattern, not what's actually happening on campus right now.
+      <div id="future-banner-title" class="text-xs font-headline font-bold text-white">Showing an upcoming semester</div>
+      <div id="future-banner-body" class="text-[10px] text-on-surface-variant font-label mt-0.5">
+        That semester hasn't started yet — today's availability reflects its class pattern.
       </div>
     </div>
   </div>
@@ -668,6 +668,10 @@
     </div>
     <div class="flex items-center gap-3">
       <div id="rds-status" class="px-3 py-1 rounded-sm text-[10px] font-bold font-label tracking-wider uppercase"></div>
+      <button onclick="copyRoomLink()" title="Copy link to this room"
+              class="w-9 h-9 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-all rounded-sm">
+        <span id="rds-share-icon" class="material-symbols-outlined text-lg">link</span>
+      </button>
       <button onclick="closeRoomDetail()" class="w-9 h-9 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
         <span class="material-symbols-outlined">close</span>
       </button>

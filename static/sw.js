@@ -2,7 +2,7 @@
  * Static assets: cache-first (updated on new CACHE_VERSION).
  * API requests: network-first with cache fallback, so the app still shows
  * the last-known room data when offline. */
-const CACHE_VERSION = 'room-finder-v1';
+const CACHE_VERSION = 'room-finder-v2';
 const PRECACHE = [
   '/',
   '/static/tailwind.css',

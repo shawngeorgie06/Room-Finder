@@ -39,6 +39,7 @@ const state = {
   mapFloor: 1,
   floorRoomsData: [],
   lastRoomsData: [],   // most recent /api/rooms result, for pin re-renders
+  detailRoom: '',      // "BLDG-ROOM" while the detail sheet is open (deep link)
 };
 
 // ── Pinned rooms (localStorage) ─────────────────────────────────────────────
@@ -73,6 +74,7 @@ function syncURL() {
   if (state.dayAt)    params.set('day', state.dayAt);
   if (state.freeAllDay) params.set('freeAllDay', '1');
   if (state.soonThresholdMins !== 30) params.set('soon', String(state.soonThresholdMins));
+  if (state.detailRoom) params.set('room', state.detailRoom);
   const newURL = params.toString() ? '?' + params.toString() : window.location.pathname;
   window.history.replaceState(null, '', newURL);
 }
@@ -110,6 +112,14 @@ function restoreStateFromURL() {
   // Switch to the saved view (must happen after DOM is ready)
   if (view && ['dashboard','rooms','map','settings'].includes(view)) {
     switchView(view);
+  }
+
+  // Deep link to a room: ?room=CKB-217 (split on the first dash —
+  // building codes never contain one, room numbers may)
+  const roomLink = params.get('room');
+  if (roomLink) {
+    const i = roomLink.indexOf('-');
+    if (i > 0) setTimeout(() => openRoomDetail(roomLink.slice(0, i), roomLink.slice(i + 1)), 300);
   }
 }
 
@@ -1065,6 +1075,9 @@ function openRoomDetail(building, room) {
   const backdrop = $('room-detail-backdrop');
   if (!sheet) return;
 
+  state.detailRoom = `${building}-${room}`;
+  syncURL();
+
   setText('rds-building', `${building} · Room Detail`);
   setText('rds-room', room);
   const statusEl = $('rds-status');
@@ -1093,6 +1106,18 @@ function closeRoomDetail() {
   if (backdrop) backdrop.classList.add('hidden');
   const fwEl = $('room-free-window');
   if (fwEl) fwEl.classList.add('hidden');
+  state.detailRoom = '';
+  syncURL();
+}
+
+function copyRoomLink() {
+  navigator.clipboard.writeText(window.location.href).then(() => {
+    const icon = $('rds-share-icon');
+    if (icon) {
+      icon.textContent = 'check';
+      setTimeout(() => { icon.textContent = 'link'; }, 1500);
+    }
+  }).catch(() => prompt('Copy this link:', window.location.href));
 }
 
 function renderRoomDetail(data) {
@@ -1404,7 +1429,12 @@ async function fetchSemesterLabel() {
     }
     if (futureBanner) {
       if (status === 'future') {
-        setText('future-banner-loaded', d.semester || 'an upcoming semester');
+        setText('future-banner-title', `Showing ${d.semester || 'an upcoming semester'}`);
+        setText('future-banner-body', "That semester hasn't started yet — today's availability reflects its class pattern, not what's actually happening on campus right now.");
+        futureBanner.classList.remove('hidden');
+      } else if (status === 'current' && d.in_session === false) {
+        setText('future-banner-title', 'Campus is between sessions');
+        setText('future-banner-body', `${d.semester || 'The semester'} classes aren't currently meeting (break or finals period) — most rooms are actually free regardless of the schedule shown.`);
         futureBanner.classList.remove('hidden');
       } else {
         futureBanner.classList.add('hidden');

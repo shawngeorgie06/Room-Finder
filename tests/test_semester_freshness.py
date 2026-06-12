@@ -1,7 +1,7 @@
 import pytest
 from datetime import date, time
 from app import (create_app, _expected_term, _is_stale, _schedule_status,
-                 _default_schedule_candidates, _term_from_entries)
+                 _default_schedule_candidates, _term_from_entries, _in_session)
 
 GOOD_CSV = (
     "Term,Course,Title,Days,Times,Location,Max,Instructor,Delivery Mode\n"
@@ -38,6 +38,32 @@ class TestIsStale:
     def test_future_term_is_not_stale(self):
         # Fall 2026 data uploaded during Summer 2026 is ahead, not outdated
         assert _is_stale(202690, date(2026, 6, 11)) is False
+
+
+class TestInSession:
+    """Approximate NJIT session windows: Spring Jan 15–May 15,
+    Summer May 15–Aug 15, Fall Sep 1–Dec 23."""
+
+    def test_summer_in_june(self):
+        assert _in_session(202650, date(2026, 6, 11)) is True
+
+    def test_fall_not_started_in_june(self):
+        assert _in_session(202690, date(2026, 6, 11)) is False
+
+    def test_fall_in_october(self):
+        assert _in_session(202690, date(2026, 10, 1)) is True
+
+    def test_fall_over_during_winter_break(self):
+        assert _in_session(202690, date(2026, 12, 28)) is False
+
+    def test_spring_in_february(self):
+        assert _in_session(202610, date(2026, 2, 1)) is True
+
+    def test_spring_before_classes_start(self):
+        assert _in_session(202610, date(2026, 1, 5)) is False
+
+    def test_unknown_term_is_none(self):
+        assert _in_session(None, date(2026, 6, 11)) is None
 
 
 class TestTermFromEntries:
