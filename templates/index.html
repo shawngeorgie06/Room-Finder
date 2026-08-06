@@ -795,19 +795,25 @@
 </nav>
 
 <!-- Mobile search overlay -->
-<div id="mobile-search-overlay" class="hidden fixed inset-0 z-[200] bg-[#080808]/95 backdrop-blur-md flex flex-col items-center pt-24 px-6 sm:hidden">
-  <div class="w-full max-w-sm relative">
+<div id="mobile-search-overlay" role="dialog" aria-modal="true" aria-label="Search rooms"
+     class="hidden fixed inset-0 z-[200] bg-[#080808]/95 backdrop-blur-md flex flex-col items-center pt-20 px-6 sm:hidden">
+  <div class="w-full max-w-sm relative flex-shrink-0">
     <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" style="font-size:20px">search</span>
     <input
       id="mobile-search-input"
       type="text"
+      inputmode="search"
       placeholder="Search room (e.g. KUPF 207)..."
       oninput="globalSearch(this.value)"
       autocomplete="off"
       class="w-full bg-surface-container border border-outline-variant/30 text-white text-sm font-label pl-10 pr-4 py-3 rounded-sm focus:outline-none focus:border-primary/60 placeholder:text-on-surface-variant/40"
     />
   </div>
-  <button onclick="toggleMobileSearch()" class="mt-6 text-xs text-on-surface-variant font-label uppercase tracking-widest">Cancel</button>
+  <!-- Live results, rendered inside the overlay so they are actually visible -->
+  <div id="mobile-search-results" class="w-full max-w-sm flex-1 overflow-y-auto mt-4 space-y-2 pb-6"
+       style="scrollbar-width:thin;scrollbar-color:rgba(63,255,139,0.15) transparent"></div>
+  <button onclick="toggleMobileSearch()"
+          class="flex-shrink-0 mb-6 min-h-[44px] px-6 text-xs text-on-surface-variant font-label uppercase tracking-widest">Cancel</button>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

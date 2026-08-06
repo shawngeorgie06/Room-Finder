@@ -20,6 +20,34 @@ const BUILDING_COORDS = {
   'CAB':  [40.74379, -74.17802],  // Central Avenue Building / Van Houten Library
 };
 
+// ── Building full names (searchable; codes alone mean nothing to new students)
+const BUILDING_NAMES = {
+  'GITC': 'Guttenberg Information Technologies Center',
+  'FMH':  'Faculty Memorial Hall',
+  'CKB':  'Central King Building',
+  'KUPF': 'Kupfrian Hall',
+  'TIER': 'Tiernan Hall',
+  'CULM': 'Cullimore Hall',
+  'ME':   'Mechanical & Industrial Engineering Center',
+  'FENS': 'Fenster Hall',
+  'ECEC': 'Electrical & Computer Engineering Building',
+  'CAMP': 'Campbell Hall',
+  'WEST': 'Weston Hall',
+  'WEC':  'Wellness & Events Center',
+  'COLT': 'Colton Hall',
+  'DHRH': 'Dorman Honors Residence Hall',
+  'HUD':  'Hudson Building',
+  'MALL': 'Student Mall',
+  'CTR':  'Campus Center',
+  'CAB':  'Central Avenue Building',
+};
+
+function buildingName(code) { return BUILDING_NAMES[code] || code; }
+function buildingLabel(code) {
+  const name = BUILDING_NAMES[code];
+  return name ? `${code} · ${name}` : code;
+}
+
 // ── State ──────────────────────────────────────────────────────────────────
 const state = {
   view: 'dashboard',
@@ -36,6 +64,7 @@ const state = {
   buildingsData: [],
   allRoomsData: [], // unfiltered rooms cache for Find Me a Room
   allRoomsCache: [],   // full roster including occupied rooms
+  allRoomsCacheKey: null, // filter signature the cache was built for
   mapFloor: 1,
   floorRoomsData: [],
   lastRoomsData: [],   // most recent /api/rooms result, for pin re-renders
@@ -229,12 +258,28 @@ async function fetchBuildings() {
   } catch(e) { console.error('Buildings error:', e); }
 }
 
+// Query params shared by every availability endpoint, so the search index
+// reflects the same day/time the rest of the UI is showing.
+function filterParams({ building = false } = {}) {
+  const params = new URLSearchParams();
+  if (building && state.building) params.set('building', state.building);
+  if (state.timeAt)  params.set('at', state.timeAt);
+  if (state.timeFor) params.set('for', String(state.timeFor));
+  if (state.dayAt)   params.set('day', state.dayAt);
+  return params;
+}
+
 async function fetchAllRoomsCache() {
-  if (state.allRoomsCache.length) return; // already loaded
+  // Re-fetch whenever the day/time filter changes — a cache built for "now"
+  // gives wrong answers once the user overrides the day or time.
+  const key = filterParams().toString();
+  if (state.allRoomsCacheKey === key && state.allRoomsCache.length) return;
   try {
-    const r = await fetch('/api/rooms/all');
+    const qs = key ? '?' + key : '';
+    const r = await fetch('/api/rooms/all' + qs);
     if (!r.ok) throw new Error(r.status);
     state.allRoomsCache = await r.json();
+    state.allRoomsCacheKey = key;
   } catch(e) { console.error('allRoomsCache error:', e); }
 }
 
@@ -342,36 +387,93 @@ function applyThreshold() {
 }
 
 // ── Global search ──────────────────────────────────────────────────────────
+function matchRooms(q) {
+  const source = state.allRoomsCache.length ? state.allRoomsCache : state.allRoomsData;
+  return source.filter(room => {
+    const full     = `${room.building} ${room.room}`.toLowerCase();
+    const roomOnly = String(room.room).toLowerCase();
+    const name     = (BUILDING_NAMES[room.building] || '').toLowerCase();
+    return full.includes(q) || roomOnly.includes(q) || name.includes(q);
+  });
+}
+
 function globalSearch(query) {
   const q = query.trim().toLowerCase();
+  const overlayOpen = isMobileSearchOpen();
+
   if (!q) {
     // Clear search: restore normal rooms view
     state.building = '';
-    fetchRooms();
+    if (overlayOpen) renderMobileSearchResults(null);
+    else fetchRooms();
     return;
   }
 
-  // Switch to rooms view so results are visible
-  switchView('rooms');
-
-  const source = state.allRoomsCache.length ? state.allRoomsCache : state.allRoomsData;
-  const matches = source.filter(room => {
-    const full = `${room.building} ${room.room}`.toLowerCase();
-    const roomOnly = room.room.toLowerCase();
-    return full.includes(q) || roomOnly.includes(q);
-  });
-
+  const matches = matchRooms(q);
   // Only show empty rooms in search results (consistent with rooms view)
   const emptyMatches = matches.filter(r => r.empty !== false);
 
+  if (overlayOpen) {
+    // Render inside the overlay — switching views behind it would put the
+    // results under a full-screen backdrop where nobody can see them.
+    renderMobileSearchResults(emptyMatches, query);
+    return;
+  }
+
+  switchView('rooms');
   setText('grid-count', `${emptyMatches.length} rooms match "${query}"`);
   renderRoomsGrid(emptyMatches);
+}
 
-  // Close mobile overlay if open
+// ── Mobile search overlay ──────────────────────────────────────────────────
+function isMobileSearchOpen() {
   const overlay = $('mobile-search-overlay');
-  if (overlay && !overlay.classList.contains('hidden') && !q) {
-    overlay.classList.add('hidden');
+  return !!overlay && !overlay.classList.contains('hidden');
+}
+
+function renderMobileSearchResults(rooms, query = '') {
+  const container = $('mobile-search-results');
+  if (!container) return;
+  container.textContent = '';
+
+  if (rooms === null) return; // empty query — show nothing, not "no results"
+
+  if (!rooms.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = "text-align:center;padding:32px 8px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em";
+    empty.textContent = `No free rooms match "${query}"`;
+    container.appendChild(empty);
+    return;
   }
+
+  const frag = document.createDocumentFragment();
+  rooms.slice(0, 30).forEach(room => {
+    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
+    const color  = isSoon ? '#f59e0b' : '#3fff8b';
+    const btn = document.createElement('button');
+    btn.style.cssText = `width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;padding:12px 14px;background:rgba(63,255,139,0.03);border:1px solid rgba(63,255,139,0.1);border-radius:2px;text-align:left;cursor:pointer`;
+    btn.addEventListener('click', () => {
+      toggleMobileSearch();
+      openRoomDetail(room.building, room.room);
+    });
+    const left = document.createElement('div');
+    left.style.cssText = 'min-width:0';
+    const bldg = document.createElement('div');
+    bldg.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:#767575;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:3px";
+    bldg.textContent = buildingLabel(room.building);
+    const num = document.createElement('div');
+    num.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:19px;font-weight:800;color:#fff;line-height:1";
+    num.textContent = room.room;
+    left.appendChild(bldg);
+    left.appendChild(num);
+    const right = document.createElement('div');
+    right.style.cssText = `font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:700;color:${color};flex-shrink:0;white-space:nowrap`;
+    right.textContent = formatTime(room.minutes_until_next);
+    btn.appendChild(left);
+    btn.appendChild(right);
+    frag.appendChild(btn);
+  });
+  container.appendChild(frag);
 }
 
 function toggleMobileSearch() {
@@ -379,9 +481,12 @@ function toggleMobileSearch() {
   if (!overlay) return;
   const isHidden = overlay.classList.contains('hidden');
   overlay.classList.toggle('hidden', !isHidden);
+  const inp = $('mobile-search-input');
   if (isHidden) {
-    const inp = $('mobile-search-input');
     if (inp) { inp.value = ''; inp.focus(); }
+    renderMobileSearchResults(null);
+  } else if (inp) {
+    inp.blur();
   }
 }
 
@@ -1445,7 +1550,12 @@ async function fetchSemesterLabel() {
 
 // Close overlays on Escape; press / to focus search
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeRoomDetail(); closeFindRoom(); }
+  if (e.key === 'Escape') {
+    closeRoomDetail();
+    closeFindRoom();
+    closeFloorPanel();
+    if (isMobileSearchOpen()) toggleMobileSearch();
+  }
   if (e.key === '/' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
     e.preventDefault();
     const search = $('global-search');
