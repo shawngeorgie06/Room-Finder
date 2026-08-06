@@ -723,6 +723,21 @@
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
+    <!-- Sort mode: most free time vs. closest to me -->
+    <div class="px-4 py-3 border-b border-primary/10 flex-shrink-0">
+      <div class="flex items-center gap-2">
+        <button id="fr-sort-time" onclick="setFindRoomSort('time')"
+                class="flex-1 min-h-[44px] px-3 text-[10px] font-bold font-label uppercase tracking-widest rounded-sm transition-all">
+          Most free time
+        </button>
+        <button id="fr-sort-distance" onclick="setFindRoomSort('distance')"
+                class="flex-1 min-h-[44px] px-3 flex items-center justify-center gap-1.5 text-[10px] font-bold font-label uppercase tracking-widest rounded-sm transition-all">
+          <span class="material-symbols-outlined" style="font-size:14px">person</span>
+          Closest to me
+        </button>
+      </div>
+      <div id="fr-geo-status" class="hidden text-[10px] font-label mt-2"></div>
+    </div>
     <!-- Building filter chips -->
     <div class="px-4 py-3 border-b border-primary/10 flex-shrink-0">
       <div id="fr-building-chips" class="flex gap-2 overflow-x-auto pb-0.5" style="scrollbar-width:none"></div>

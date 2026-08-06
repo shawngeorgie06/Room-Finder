@@ -69,6 +69,9 @@ const state = {
   floorRoomsData: [],
   lastRoomsData: [],   // most recent /api/rooms result, for pin re-renders
   detailRoom: '',      // "BLDG-ROOM" while the detail sheet is open (deep link)
+  userPos: null,       // {lat, lon} once the user opts into location
+  frSort: 'time',      // Find Me a Room ranking: 'time' | 'distance'
+  frLastRooms: [],     // last result set rendered in Find Me a Room
 };
 
 // ── Pinned rooms (localStorage) ─────────────────────────────────────────────
@@ -1357,6 +1360,91 @@ function renderRoomDetail(data) {
   }
 }
 
+// ── Geolocation: rank rooms by how far you have to walk ─────────────────────
+// A commuter with a gap wants the closest free room, not the one with the
+// most hours left on the far side of campus. BUILDING_COORDS already has
+// every building, so this is a straight distance sort.
+function haversineMeters(lat1, lon1, lat2, lon2) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function roomDistanceMeters(room) {
+  if (!state.userPos) return null;
+  const c = BUILDING_COORDS[room.building];
+  if (!c) return null;
+  return haversineMeters(state.userPos.lat, state.userPos.lon, c[0], c[1]);
+}
+
+// ~1.35 m/s average walking pace.
+function formatDistance(m) {
+  if (m === null) return '';
+  const mins = Math.max(1, Math.round(m / 1.35 / 60));
+  return m < 1000 ? `${Math.round(m)} m · ${mins} min walk` : `${(m / 1000).toFixed(1)} km`;
+}
+
+function setGeoStatus(msg, color) {
+  const el = $('fr-geo-status');
+  if (!el) return;
+  if (!msg) { el.classList.add('hidden'); return; }
+  el.textContent = msg;
+  el.style.color = color || '#767575';
+  el.classList.remove('hidden');
+}
+
+function requestLocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error('unsupported'));
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        state.userPos = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        resolve(state.userPos);
+      },
+      err => reject(err),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    );
+  });
+}
+
+function _updateSortButtons() {
+  const on  = 'border:1px solid #3fff8b;background:rgba(63,255,139,0.12);color:#3fff8b';
+  const off = 'border:1px solid rgba(255,255,255,0.08);background:transparent;color:#adaaaa';
+  const t = $('fr-sort-time'), d = $('fr-sort-distance');
+  if (t) t.style.cssText = state.frSort === 'time' ? on : off;
+  if (d) d.style.cssText = (state.frSort === 'distance' ? on : off) +
+                           ';display:flex;align-items:center;justify-content:center;gap:6px';
+}
+
+async function setFindRoomSort(mode) {
+  if (mode === 'distance') {
+    if (!state.userPos) {
+      setGeoStatus('Getting your location…', '#767575');
+      try {
+        await requestLocation();
+        setGeoStatus('');
+      } catch (err) {
+        const msg = err && err.code === 1
+          ? 'Location permission denied — sorting by free time instead.'
+          : 'Could not get your location — sorting by free time instead.';
+        setGeoStatus(msg, '#f59e0b');
+        state.frSort = 'time';
+        _updateSortButtons();
+        renderFindRoom(state.frLastRooms);
+        return;
+      }
+    }
+    // Off campus, distance ranking is meaningless.
+    const far = haversineMeters(state.userPos.lat, state.userPos.lon, 40.7424, -74.1779) > 3000;
+    if (far) setGeoStatus("You look far from campus — distances are from NJIT's Newark campus.", '#f59e0b');
+  }
+  state.frSort = mode;
+  _updateSortButtons();
+  renderFindRoom(state.frLastRooms);
+}
+
 // ── Find Me a Room ───────────────────────────────────────────────────────────
 let frBuilding = '';
 
@@ -1421,15 +1509,31 @@ function clearGapWindow() {
 }
 
 function renderFindRoom(rooms) {
-  // Sort: free all day first, then by most minutes remaining
   const source = rooms || state.allRoomsData;
+  state.frLastRooms = source;
   const filtered = frBuilding ? source.filter(r => r.building === frBuilding) : source;
-  const sorted = [...filtered].sort((a, b) => {
-    if (a.minutes_until_next === null && b.minutes_until_next === null) return 0;
-    if (a.minutes_until_next === null) return -1;
-    if (b.minutes_until_next === null) return 1;
-    return b.minutes_until_next - a.minutes_until_next;
-  });
+
+  let sorted;
+  if (state.frSort === 'distance' && state.userPos) {
+    // Closest first; rooms in buildings we have no coordinates for sink to
+    // the bottom rather than sorting as if they were at distance zero.
+    sorted = [...filtered].sort((a, b) => {
+      const da = roomDistanceMeters(a), db = roomDistanceMeters(b);
+      if (da === null && db === null) return 0;
+      if (da === null) return 1;
+      if (db === null) return -1;
+      return da - db;
+    });
+  } else {
+    // Free all day first, then by most minutes remaining
+    sorted = [...filtered].sort((a, b) => {
+      if (a.minutes_until_next === null && b.minutes_until_next === null) return 0;
+      if (a.minutes_until_next === null) return -1;
+      if (b.minutes_until_next === null) return 1;
+      return b.minutes_until_next - a.minutes_until_next;
+    });
+  }
+  _updateSortButtons();
 
   // Building chips
   const chipsEl = $('fr-building-chips');
@@ -1466,11 +1570,16 @@ function renderFindRoom(rooms) {
     row.onmouseover = () => { row.style.background = 'rgba(63,255,139,0.08)'; };
     row.onmouseout  = () => { row.style.background = 'rgba(63,255,139,0.03)'; };
     row.onclick = () => { closeFindRoom(); openRoomDetail(room.building, room.room); };
+    const dist = roomDistanceMeters(room);
+    const distLabel = dist !== null
+      ? `<div style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:#6e9bff;margin-top:3px">${formatDistance(dist)}</div>`
+      : '';
     row.innerHTML = `
       <div style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:800;color:#444;min-width:20px;text-align:center">#${i+1}</div>
       <div style="flex:1;min-width:0">
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:#767575;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:3px">${room.building}</div>
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:19px;font-weight:800;color:#fff;line-height:1">${room.room}</div>
+        <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:#adaaaa;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(buildingName(room.building))}">${esc(room.building)} · ${esc(buildingName(room.building))}</div>
+        <div style="font-family:'Space Grotesk',sans-serif;font-size:19px;font-weight:800;color:#fff;line-height:1">${esc(room.room)}</div>
+        ${distLabel}
       </div>
       <div style="text-align:right;flex-shrink:0">
         <div style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:700;color:${color}">${formatTime(room.minutes_until_next)}</div>
