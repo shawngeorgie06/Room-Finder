@@ -452,8 +452,12 @@ function globalSearch(query) {
   }
 
   switchView('rooms');
-  setText('grid-count', `${emptyMatches.length} rooms match "${query}"`);
   renderRoomsGrid(emptyMatches);
+  // After renderRoomsGrid — it sets grid-count itself and would otherwise
+  // overwrite the search context with a plain "N rooms available".
+  const n = emptyMatches.length;
+  setText('grid-count', n === 1 ? `1 room matches "${query}"` : `${n} rooms match "${query}"`);
+  announce(`${emptyMatches.length} rooms match ${query}.`);
 }
 
 // ── Mobile search overlay ──────────────────────────────────────────────────
@@ -1431,8 +1435,10 @@ function roomDistanceMeters(room) {
 // ~1.35 m/s average walking pace.
 function formatDistance(m) {
   if (m === null) return '';
+  if (m < 50) return "you're in this building";
+  if (m >= 1000) return `${(m / 1000).toFixed(1)} km away`;
   const mins = Math.max(1, Math.round(m / 1.35 / 60));
-  return m < 1000 ? `${Math.round(m)} m · ${mins} min walk` : `${(m / 1000).toFixed(1)} km`;
+  return `${Math.round(m)} m · ${mins} min walk`;
 }
 
 function setGeoStatus(msg, color) {

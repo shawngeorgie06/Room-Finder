@@ -22,3 +22,7 @@ node_modules/
 
 # Uploaded schedules (written at runtime by /api/upload-schedule, one per term)
 uploaded_schedule*
+
+# Local virtualenv
+.venv/
+venv/
