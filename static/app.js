@@ -171,6 +171,29 @@ function copyShareLink() {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function $(id) { return document.getElementById(id); }
+
+// Room cards, floor tiles and pins are <div>/<span> with click handlers, which
+// keyboard and screen-reader users cannot reach at all. This makes one behave
+// like a button: focusable, labelled, and activated by Enter or Space.
+function makeActivatable(el, label, onActivate) {
+  el.setAttribute('role', 'button');
+  el.setAttribute('tabindex', '0');
+  if (label) el.setAttribute('aria-label', label);
+  el.addEventListener('click', onActivate);
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      onActivate(e);
+    }
+  });
+}
+
+// Screen-reader announcement for changes that are otherwise only visual
+// (auto-refresh results, filter changes).
+function announce(msg) {
+  const el = $('sr-status');
+  if (el) el.textContent = msg;
+}
 function setText(id, val) { const e = $(id); if (e) e.textContent = val; }
 function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
 
@@ -312,7 +335,12 @@ async function fetchRooms() {
     const t = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
     setText('sidebar-status', `${data.length} rooms free · ${t}`);
     setText('footer-sync', t);
-  } catch(e) { console.error('Rooms error:', e); }
+    announce(`${data.length} room${data.length === 1 ? '' : 's'} available${
+      state.building ? ' in ' + buildingName(state.building) : ''}.`);
+  } catch(e) {
+    console.error('Rooms error:', e);
+    announce('Could not load rooms.');
+  }
 }
 
 // ── Stats ──────────────────────────────────────────────────────────────────
@@ -517,8 +545,10 @@ function renderBestRooms(rooms) {
     const color = isSoon ? '#f59e0b' : '#3fff8b';
     const barPct = room.minutes_until_next === null ? 100 : Math.min(100, room.minutes_until_next / 180 * 100);
     const row = document.createElement('div');
-    row.style.cssText = `padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.04);border-radius:2px;cursor:pointer;transition:all 0.15s`;
-    row.addEventListener('click', () => openRoomDetail(room.building, room.room));
+    row.className = 'interactive';
+    row.style.cssText = `padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.04);border-radius:2px;cursor:pointer;transition:all 0.15s;min-height:44px`;
+    makeActivatable(row, `${buildingName(room.building)} room ${room.room}, ${formatTime(room.minutes_until_next)} free. Open schedule.`,
+                    () => openRoomDetail(room.building, room.room));
     row.addEventListener('mouseover', () => { row.style.background = 'rgba(63,255,139,0.05)'; row.style.borderColor = 'rgba(63,255,139,0.15)'; });
     row.addEventListener('mouseout',  () => { row.style.background = 'rgba(255,255,255,0.02)'; row.style.borderColor = 'rgba(255,255,255,0.04)'; });
     row.innerHTML = `
@@ -617,16 +647,22 @@ function renderDashRooms(rooms) {
     const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
     const color = isSoon ? '#f59e0b' : '#3fff8b';
     const cell = document.createElement('div');
-    cell.style.cssText = `background:${color}10;border:1px solid ${color}30;padding:8px;border-radius:2px;cursor:pointer;transition:background 0.15s;position:relative`;
+    cell.className = 'interactive';
+    cell.style.cssText = `background:${color}10;border:1px solid ${color}30;padding:8px;border-radius:2px;cursor:pointer;transition:background 0.15s;position:relative;min-height:44px`;
     const pinned = isPinned(room.building, room.room);
-    const pin = document.createElement('span');
+    const pin = document.createElement('button');
+    pin.type = 'button';
     pin.textContent = pinned ? '★' : '☆';
     pin.title = pinned ? 'Unpin' : 'Pin to top';
-    pin.style.cssText = `position:absolute;top:4px;right:6px;font-size:11px;cursor:pointer;color:${pinned ? '#3fff8b' : '#484847'};z-index:2;line-height:1`;
-    pin.onclick = e => { e.stopPropagation(); togglePin(room.building, room.room); };
+    pin.setAttribute('aria-pressed', String(pinned));
+    pin.setAttribute('aria-label', `${pinned ? 'Unpin' : 'Pin'} ${room.building} ${room.room}`);
+    pin.style.cssText = `position:absolute;top:0;right:0;font-size:13px;cursor:pointer;color:${pinned ? '#3fff8b' : '#8a8a89'};z-index:2;line-height:1;background:none;border:none;padding:8px;min-width:32px;min-height:32px`;
+    pin.addEventListener('click', e => { e.stopPropagation(); togglePin(room.building, room.room); });
+    pin.addEventListener('keydown', e => e.stopPropagation());
     cell.appendChild(pin);
     cell.title = `${room.building}-${room.room} · tap for schedule`;
-    cell.onclick = () => openRoomDetail(room.building, room.room);
+    makeActivatable(cell, `${buildingName(room.building)} room ${room.room}. Open schedule.`,
+                    () => openRoomDetail(room.building, room.room));
     cell.onmouseover = () => { cell.style.background = `${color}20`; };
     cell.onmouseout  = () => { cell.style.background = `${color}10`; };
     const _dcBldg = document.createElement('div');
@@ -753,10 +789,17 @@ function renderRoomsGrid(rooms) {
     const border = isSoon ? 'rgba(245,158,11,0.2)' : 'rgba(63,255,139,0.1)';
     const pinned = isPinned(room.building, room.room);
     const card = document.createElement('div');
-    card.className = 'room-card-in';
+    card.className = 'room-card-in interactive';
     card.style.cssText = `background:linear-gradient(135deg,rgba(26,25,25,0.8),rgba(14,14,14,0.95));border:1px solid ${border};padding:14px;border-radius:2px;position:relative;overflow:hidden;transition:border-color 0.2s,background 0.2s;cursor:pointer;animation-delay:${Math.min(i,30)*22}ms`;
     card.title = `${room.building}-${room.room} · tap for schedule`;
-    card.addEventListener('click',     () => openRoomDetail(room.building, room.room));
+    const statusWord = isSoon ? 'closing soon' : 'open';
+    makeActivatable(
+      card,
+      `${buildingName(room.building)} room ${room.room}, ${statusWord}, ${
+        room.minutes_until_next === null ? 'free all day' : room.minutes_until_next + ' minutes free'
+      }. Open schedule.`,
+      () => openRoomDetail(room.building, room.room)
+    );
     card.addEventListener('mouseover', () => { card.style.borderColor = color + '50'; card.style.background = `linear-gradient(135deg,rgba(26,25,25,0.95),rgba(${color==='#3fff8b'?'14,40,24':'40,20,14'},0.95))`; });
     card.addEventListener('mouseout',  () => { card.style.borderColor = border; card.style.background = 'linear-gradient(135deg,rgba(26,25,25,0.8),rgba(14,14,14,0.95))'; });
     const capLabel = room.capacity ? `<span style="font-family:'Space Grotesk',sans-serif;font-size:8px;color:#484847;letter-spacing:0.1em">cap ${room.capacity}</span>` : '';
@@ -768,9 +811,13 @@ function renderRoomsGrid(rooms) {
         <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:600;color:#767575;letter-spacing:0.15em;text-transform:uppercase">${room.building}</span>
         <div style="display:flex;align-items:center;gap:6px">
           ${typeLabel}
-          <span onclick="event.stopPropagation();togglePin('${room.building}','${room.room}')"
+          <button type="button"
+                onclick="event.stopPropagation();togglePin('${esc(room.building)}','${esc(room.room)}')"
+                onkeydown="event.stopPropagation()"
+                aria-pressed="${pinned}"
+                aria-label="${pinned ? 'Unpin' : 'Pin'} ${esc(room.building)} ${esc(room.room)}"
                 title="${pinned ? 'Unpin' : 'Pin to top'}"
-                style="font-size:12px;cursor:pointer;color:${pinned ? '#3fff8b' : '#484847'};line-height:1">${pinned ? '★' : '☆'}</span>
+                style="font-size:15px;cursor:pointer;color:${pinned ? '#3fff8b' : '#8a8a89'};line-height:1;background:none;border:none;padding:8px;margin:-8px;min-width:32px;min-height:32px">${pinned ? '★' : '☆'}</button>
         </div>
       </div>
       <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:12px">
@@ -1035,9 +1082,11 @@ function renderRoomGrid(rooms, floor, query = '') {
                  : room.minutes_until_next === null ? 'Free all day'
                  : `${room.minutes_until_next}m free`;
     const cell = document.createElement('div');
-    cell.style.cssText = `background:${color}0d;border:1px solid ${color}30;border-top:2px solid ${color};padding:10px 9px 9px;border-radius:2px;transition:all 0.15s;cursor:pointer`;
+    cell.className = 'interactive';
+    cell.style.cssText = `background:${color}0d;border:1px solid ${color}30;border-top:2px solid ${color};padding:10px 9px 9px;border-radius:2px;transition:all 0.15s;cursor:pointer;min-height:44px`;
     cell.title = `${room.room} · tap for schedule`;
-    cell.onclick = () => openRoomDetail(room.building, room.room);
+    makeActivatable(cell, `Room ${room.room}, ${status}. Open schedule.`,
+                    () => openRoomDetail(room.building, room.room));
     cell.onmouseover = () => { cell.style.background = `${color}1a`; cell.style.transform = 'translateY(-1px)'; };
     cell.onmouseout  = () => { cell.style.background = `${color}0d`; cell.style.transform = ''; };
     cell.innerHTML = `
@@ -1566,10 +1615,12 @@ function renderFindRoom(rooms) {
     const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
     const color  = isSoon ? '#f59e0b' : '#3fff8b';
     const row = document.createElement('div');
-    row.style.cssText = `display:flex;align-items:center;gap:14px;padding:13px 14px;background:rgba(63,255,139,0.03);border:1px solid rgba(63,255,139,0.07);border-radius:2px;cursor:pointer;transition:background 0.15s`;
+    row.className = 'interactive';
+    row.style.cssText = `display:flex;align-items:center;gap:14px;padding:13px 14px;background:rgba(63,255,139,0.03);border:1px solid rgba(63,255,139,0.07);border-radius:2px;cursor:pointer;transition:background 0.15s;min-height:56px`;
     row.onmouseover = () => { row.style.background = 'rgba(63,255,139,0.08)'; };
     row.onmouseout  = () => { row.style.background = 'rgba(63,255,139,0.03)'; };
-    row.onclick = () => { closeFindRoom(); openRoomDetail(room.building, room.room); };
+    makeActivatable(row, `${buildingName(room.building)} room ${room.room}, ${formatTime(room.minutes_until_next)} free. Open schedule.`,
+                    () => { closeFindRoom(); openRoomDetail(room.building, room.room); });
     const dist = roomDistanceMeters(room);
     const distLabel = dist !== null
       ? `<div style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:#6e9bff;margin-top:3px">${formatDistance(dist)}</div>`

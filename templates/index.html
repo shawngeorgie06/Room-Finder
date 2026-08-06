@@ -61,10 +61,45 @@
   .kinetic-popup .leaflet-popup-close-button:hover { color: #fff !important; }
   .room-card-in { animation: card-in 0.3s ease both; }
   @keyframes card-in { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+
+  /* Visible keyboard focus. Inputs use focus:outline-none with only a border
+     tint, which is not perceivable enough to navigate by. */
+  :focus-visible {
+    outline: 2px solid #3fff8b !important;
+    outline-offset: 2px !important;
+    border-radius: 2px;
+  }
+  /* Hover effects are applied inline as mouseover/mouseout handlers, which
+     latch on touch devices and leave tapped cards stuck in a hover state.
+     Suppress the visual result where hover is not a real capability. */
+  @media (hover: none) {
+    .interactive:hover { background: inherit !important; }
+  }
+  /* Skip link: hidden until focused. Plain CSS rather than Tailwind's
+     focus:not-sr-only, which is absent from the prebuilt stylesheet. */
+  .skip-link {
+    position: absolute; left: -9999px; top: 0; z-index: 300;
+    padding: 10px 16px; background: #3fff8b; color: #005d2c;
+    font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 13px;
+  }
+  .skip-link:focus { left: 8px; top: 8px; }
+  /* Screen-reader-only live region */
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .scanline { animation: none; }
+    .room-card-in { animation: none; }
+    * { transition-duration: 0.01ms !important; }
+  }
 </style>
 </head>
 <body class="bg-[#080808] text-on-background font-body selection:bg-primary selection:text-on-primary overflow-x-hidden">
-<div class="scanline"></div>
+<a href="#rooms-container" class="skip-link" onclick="switchView('rooms')">Skip to room list</a>
+<!-- Announces refresh/filter results to screen readers -->
+<div id="sr-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+<div class="scanline" aria-hidden="true"></div>
 
 <!-- TOP NAVIGATION -->
 <header class="fixed top-0 w-full z-50 flex justify-between items-center px-6 h-16 bg-[#0e0e0e]/90 backdrop-blur-md text-[#00E676] font-headline tracking-tighter uppercase border-b border-primary/20 shadow-[0_0_30px_rgba(0,0,0,0.5)]">
