@@ -142,6 +142,7 @@ function restoreStateFromURL() {
   }
 
   // Switch to the saved view (must happen after DOM is ready)
+  if (view === 'finder') view = 'dashboard';
   if (view && ['dashboard','rooms','map','settings'].includes(view)) {
     switchView(view);
   }
@@ -219,35 +220,95 @@ updateClock();
 setInterval(updateClock, 1000);
 
 // ── View switching ─────────────────────────────────────────────────────────
+// Two jobs in the chrome: Finder (home + room grid) vs Explore (map).
+// Settings is a header gear. Search is a mobile tab that focuses the
+// always-visible header field from the search-first work.
+let searchNavActive = false;
+
 function switchView(view) {
+  if (view === 'finder') view = 'dashboard';
+  searchNavActive = false;
   state.view = view;
   ['dashboard', 'rooms', 'map', 'settings'].forEach(v => {
     const el = $('view-' + v);
     if (el) el.classList.toggle('hidden', v !== view);
-
-    // Desktop sidebar nav
-    const nav = $('nav-' + v);
-    if (nav) {
-      if (v === view) {
-        nav.classList.add('active-nav');
-        nav.classList.remove('text-on-surface-variant/60');
-      } else {
-        nav.classList.remove('active-nav');
-        nav.classList.add('text-on-surface-variant/60');
-      }
-    }
-
-    // Mobile bottom nav
-    const mob = $('mob-nav-' + v);
-    if (mob) {
-      const color = v === view ? '#3fff8b' : '#adaaaa';
-      mob.querySelectorAll('span').forEach(s => s.style.color = color);
-    }
   });
-  if (view === 'map')       initMap();
-  if (view === 'dashboard') initDashMap();
-  if (view === 'settings')  fetchScheduleInfo();
+  closeSearchUI({ clear: false });
+  updateNavChrome();
+  if (view === 'map') {
+    initMap();
+    setTimeout(() => { if (state.map) state.map.invalidateSize(); }, 50);
+  }
+  if (view === 'settings') fetchScheduleInfo();
   syncURL();
+}
+
+function toggleSettings() {
+  switchView(state.view === 'settings' ? 'dashboard' : 'settings');
+}
+
+function setSidebarActive(id, on) {
+  const nav = $(id);
+  if (!nav) return;
+  if (on) {
+    nav.classList.add('active-nav');
+    nav.classList.remove('text-on-surface-variant/60');
+    nav.setAttribute('aria-current', 'page');
+  } else {
+    nav.classList.remove('active-nav');
+    nav.classList.add('text-on-surface-variant/60');
+    nav.removeAttribute('aria-current');
+  }
+}
+
+function setMobNavActive(id, on) {
+  const btn = $(id);
+  if (!btn) return;
+  const color = on ? '#3fff8b' : '#adaaaa';
+  btn.setAttribute('aria-current', on ? 'page' : 'false');
+  btn.querySelectorAll('span, svg').forEach(s => { s.style.color = color; });
+}
+
+function updateNavChrome() {
+  const finderJob = state.view === 'dashboard' || state.view === 'rooms';
+  const mapOn = state.view === 'map';
+  const settingsOn = state.view === 'settings';
+  const searchOn = searchNavActive || isSearchPanelOpen();
+
+  // Desktop: Finder stays lit on the room grid (same job); Explore = map.
+  setSidebarActive('nav-dashboard', finderJob && !settingsOn);
+  setSidebarActive('nav-map', mapOn);
+
+  const gear = $('hdr-settings');
+  if (gear) gear.setAttribute('aria-current', settingsOn ? 'page' : 'false');
+
+  setMobNavActive('mob-nav-find', finderJob && !searchOn && !settingsOn);
+  setMobNavActive('mob-nav-search', searchOn);
+  setMobNavActive('mob-nav-map', mapOn && !searchOn);
+}
+
+function onMobileSearchTab() {
+  searchNavActive = true;
+  updateNavChrome();
+  const inp = $('global-search');
+  if (inp) {
+    inp.focus();
+    onSearchFocus(inp);
+  }
+}
+
+function finderClosestChip() {
+  openFindRoom();
+  setFindRoomSort('distance');
+}
+
+function finderGapChip() {
+  openFindRoom();
+  const from = $('fr-gap-from');
+  if (from) {
+    from.focus();
+    if (from.scrollIntoView) from.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 // ── Fetch data ─────────────────────────────────────────────────────────────
@@ -681,6 +742,8 @@ function closeSearchUI({ clear = false } = {}) {
     });
   }
   setSearchExpanded(false);
+  searchNavActive = false;
+  updateNavChrome();
 }
 
 function addSearchGroupLabel(parent, text) {
@@ -877,9 +940,26 @@ function onSearchInput(value, sourceId) {
 }
 
 function onSearchFocus(input) {
+  searchNavActive = true;
+  updateNavChrome();
   const q = input ? input.value : '';
   syncSearchInputs(q, input && input.id);
   runSearch(q);
+}
+
+function onSearchBlur() {
+  setTimeout(() => {
+    const ae = document.activeElement;
+    const wrap = $('search-wrap');
+    const overlay = $('mobile-search-overlay');
+    const stillIn = (wrap && wrap.contains(ae)) ||
+                    (overlay && overlay.contains(ae)) ||
+                    isSearchPanelOpen();
+    if (!stillIn) {
+      searchNavActive = false;
+      updateNavChrome();
+    }
+  }, 50);
 }
 
 function onSearchKeydown(e) {
@@ -942,19 +1022,30 @@ function openMobileSearch() {
 function toggleMobileSearch() {
   const overlay = $('mobile-search-overlay');
   if (!overlay) return;
-  if (overlay.classList.contains('hidden')) openMobileSearch();
-  else {
+  if (overlay.classList.contains('hidden')) {
+    searchNavActive = true;
+    openMobileSearch();
+    updateNavChrome();
+  } else {
     overlay.classList.add('hidden');
     const inp = $('mobile-search-input');
     if (inp) inp.blur();
     setSearchExpanded(false);
+    searchNavActive = false;
+    updateNavChrome();
   }
 }
 
 document.addEventListener('mousedown', e => {
   if (isMobileSearchOpen()) return;
   const wrap = $('search-wrap');
-  if (wrap && !wrap.contains(e.target)) hideSearchPanel();
+  if (wrap && !wrap.contains(e.target)) {
+    hideSearchPanel();
+    if (document.activeElement !== $('global-search')) {
+      searchNavActive = false;
+      updateNavChrome();
+    }
+  }
 });
 
 // ── Health bars ────────────────────────────────────────────────────────────
@@ -967,11 +1058,18 @@ function _sortedBestRooms(rooms, limit) {
   }).slice(0, limit);
 }
 
+function formatFreeLabel(minutes) {
+  if (minutes === null || minutes === undefined) return 'Free all day';
+  if (minutes < 60) return `Free ${minutes}m`;
+  const h = Math.floor(minutes / 60), m = minutes % 60;
+  return m > 0 ? `Free ${h}h ${m}m` : `Free ${h}h`;
+}
+
 function renderBestRooms(rooms) {
   const container = $('dash-best-rooms');
   if (!container) return;
   container.innerHTML = '';
-  const best = _sortedBestRooms(rooms, 6);
+  const best = _sortedBestRooms(rooms, 4);
   if (!best.length) {
     container.innerHTML = `<div style="text-align:center;padding:32px;color:#484847;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em">No rooms available</div>`;
     return;
@@ -979,25 +1077,20 @@ function renderBestRooms(rooms) {
   best.forEach(room => {
     const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
     const color = isSoon ? '#f59e0b' : '#3fff8b';
-    const barPct = room.minutes_until_next === null ? 100 : Math.min(100, room.minutes_until_next / 180 * 100);
     const row = document.createElement('div');
     row.className = 'interactive';
-    row.style.cssText = `padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.04);border-radius:2px;cursor:pointer;transition:all 0.15s;min-height:44px`;
-    makeActivatable(row, `${buildingName(room.building)} room ${room.room}, ${formatTime(room.minutes_until_next)} free. Open schedule.`,
+    row.style.cssText = `display:flex;align-items:center;gap:12px;padding:12px 14px;background:transparent;border:1px solid rgba(63,255,139,0.22);border-radius:4px;cursor:pointer;transition:all 0.15s;min-height:52px`;
+    makeActivatable(row, `${buildingName(room.building)} room ${room.room}, ${formatFreeLabel(room.minutes_until_next)}. Open schedule.`,
                     () => openRoomDetail(room.building, room.room));
-    row.addEventListener('mouseover', () => { row.style.background = 'rgba(63,255,139,0.05)'; row.style.borderColor = 'rgba(63,255,139,0.15)'; });
-    row.addEventListener('mouseout',  () => { row.style.background = 'rgba(255,255,255,0.02)'; row.style.borderColor = 'rgba(255,255,255,0.04)'; });
+    row.addEventListener('mouseover', () => { row.style.background = 'rgba(63,255,139,0.06)'; row.style.borderColor = 'rgba(63,255,139,0.45)'; });
+    row.addEventListener('mouseout',  () => { row.style.background = 'transparent'; row.style.borderColor = 'rgba(63,255,139,0.22)'; });
     row.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <div>
-          <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:#767575;text-transform:uppercase;letter-spacing:0.1em">${room.building}</span>
-          <span style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:800;color:#fff;margin-left:8px">${room.room}</span>
-        </div>
-        <span style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:700;color:${color}">${formatTime(room.minutes_until_next)}</span>
+      <span class="material-symbols-outlined" style="font-size:22px;color:#3fff8b;flex-shrink:0">apartment</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:800;color:#fff;line-height:1.2">${esc(room.building)} ${esc(room.room)}</div>
+        <div style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:700;color:${color};margin-top:3px">${esc(formatFreeLabel(room.minutes_until_next))}</div>
       </div>
-      <div style="height:2px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden">
-        <div style="height:100%;width:${barPct}%;background:${color};opacity:0.5;transition:width 0.5s ease"></div>
-      </div>`;
+      <span class="material-symbols-outlined" style="font-size:20px;color:#767575;flex-shrink:0">arrow_forward</span>`;
     container.appendChild(row);
   });
 }
@@ -2203,7 +2296,6 @@ async function init() {
   await refresh();
   nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
   updateCountdown();
-  initDashMap(); // init dashboard map after data is loaded
   fetchSemesterLabel();
   setInterval(scheduledRefresh, REFRESH_INTERVAL_MS);
 
