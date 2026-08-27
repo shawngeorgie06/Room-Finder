@@ -36,7 +36,6 @@
   @keyframes scanline { 0% { bottom: 100%; } 100% { bottom: -100px; } }
   .heatmap-cell:hover { filter: brightness(1.5); box-shadow: 0 0 15px rgba(63,255,139,0.5); z-index: 10; }
   .active-nav { background: rgba(63,255,139,0.1) !important; color: #3fff8b !important; border-left: 2px solid #3fff8b !important; }
-  .hdr-gear[aria-current="page"] { color: #3fff8b; background: rgba(63,255,139,0.1); }
   /* Full map sits above the sticky mobile bar; desktop uses the header only. */
   #view-map {
     height: calc(100vh - 64px - 3.5rem - env(safe-area-inset-bottom, 0px));
@@ -179,7 +178,7 @@
     </div>
     <button id="hdr-settings" type="button" onclick="toggleSettings()"
             aria-label="Settings"
-            class="hdr-gear w-11 h-11 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-sm text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-all">
+            class="w-9 h-9 rounded-sm bg-surface-container border border-outline-variant/20 flex items-center justify-center text-on-surface-variant hover:text-primary">
       <span class="material-symbols-outlined">settings</span>
     </button>
   </div>
@@ -195,7 +194,7 @@
     <a id="nav-dashboard" href="#" onclick="switchView('dashboard');return false;"
        aria-current="page"
        class="active-nav px-4 py-3 flex items-center gap-3 transition-all font-headline text-sm tracking-tight rounded-sm">
-      <span class="material-symbols-outlined text-xl">meeting_room</span><span>Finder</span>
+      <span class="material-symbols-outlined text-xl">grid_view</span><span>Finder</span>
     </a>
     <a id="nav-map" href="#" onclick="switchView('map');return false;"
        class="text-on-surface-variant/60 px-4 py-3 flex items-center gap-3 hover:bg-surface-container hover:text-white transition-all font-headline text-sm tracking-tight rounded-sm">
@@ -259,12 +258,12 @@
     </div>
   </div>
 
-  <!-- ═══ FINDER HOME (default) ═══ -->
-  <div id="view-dashboard" class="px-4 md:px-8 kinetic-grid">
-    <div id="finder-home" class="max-w-xl mx-auto pt-6 md:pt-10 space-y-5">
+  <!-- ═══ FINDER HOME (dashboard chrome, map moved to Explore) ═══ -->
+  <div id="view-dashboard" class="px-4 md:px-8 kinetic-grid min-h-screen">
+    <div id="finder-home" class="max-w-[1600px] mx-auto space-y-8">
 
       <!-- No-classes banner (weekend / holiday) -->
-      <div id="dash-no-classes-banner" class="hidden px-4 py-3 bg-surface-container border border-outline-variant/20 rounded-sm flex items-center gap-3">
+      <div id="dash-no-classes-banner" class="hidden mt-6 px-4 py-3 bg-surface-container border border-outline-variant/20 rounded-sm flex items-center gap-3">
         <span class="material-symbols-outlined text-on-surface-variant text-xl">event_busy</span>
         <div>
           <div class="text-xs font-headline font-bold text-white">No classes scheduled today</div>
@@ -272,57 +271,69 @@
         </div>
       </div>
 
-      <div class="flex items-end justify-between gap-3">
-        <h1 class="text-4xl sm:text-5xl font-headline font-extrabold tracking-tighter text-white">Finder</h1>
-        <div class="flex items-center gap-2 pb-1">
-          <span class="px-2 py-0.5 bg-primary/20 text-primary text-[10px] font-bold border border-primary/30 tracking-[0.2em]">LIVE</span>
-          <span id="dash-semester" class="hidden sm:inline text-on-surface-variant font-label text-[10px] uppercase tracking-[0.1em]">Auto-refresh 60s</span>
+      <!-- Page Header (production dashboard header, map omitted) -->
+      <div class="flex flex-col xl:flex-row xl:items-end justify-between gap-6 border-b border-outline-variant/10 pb-6">
+        <div>
+          <div class="flex items-center gap-3 mb-1">
+            <span class="px-2 py-0.5 bg-primary/20 text-primary text-[10px] font-bold border border-primary/30 tracking-[0.2em]">LIVE</span>
+            <span id="dash-semester" class="text-on-surface-variant font-label text-xs uppercase tracking-[0.1em]">Auto-refresh 60s</span>
+          </div>
+          <h1 class="text-3xl sm:text-5xl font-headline font-extrabold tracking-tighter text-white">Finder</h1>
+          <button onclick="openFindRoom()"
+                  class="mt-3 inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-on-primary font-headline font-bold text-sm rounded-sm hover:brightness-110 transition-all shadow-[0_0_20px_rgba(63,255,139,0.25)]">
+            <span class="material-symbols-outlined text-base">search</span>
+            Find Me a Room
+          </button>
+          <div class="mt-3 flex flex-wrap gap-2">
+            <button type="button" onclick="finderClosestChip()"
+                    class="inline-flex items-center gap-1.5 px-4 py-1.5 text-[10px] font-bold bg-primary/10 border border-primary/30 text-primary rounded-sm uppercase tracking-widest hover:bg-primary/20 transition-all">
+              <span class="material-symbols-outlined" style="font-size:14px">person</span>
+              Closest to me
+            </button>
+            <button type="button" onclick="finderGapChip()"
+                    class="inline-flex items-center gap-1.5 px-4 py-1.5 text-[10px] font-bold bg-primary/10 border border-primary/30 text-primary rounded-sm uppercase tracking-widest hover:bg-primary/20 transition-all">
+              <span class="material-symbols-outlined" style="font-size:14px">schedule</span>
+              Free during my gap
+            </button>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div class="px-5 py-3 bg-surface-container/40 border-l-2 border-outline-variant/40 rounded-sm min-w-0">
+            <div class="text-[10px] text-on-surface-variant font-label tracking-widest uppercase mb-1">Total Rooms</div>
+            <div id="stat-total" class="text-2xl font-headline font-bold text-white leading-none">--</div>
+          </div>
+          <div class="px-5 py-3 bg-surface-container/40 border-l-2 border-primary rounded-sm min-w-0">
+            <div class="text-[10px] text-on-surface-variant font-label tracking-widest uppercase mb-1">Empty Now</div>
+            <div id="stat-empty" class="text-2xl font-headline font-bold text-primary leading-none">--</div>
+          </div>
+          <div class="px-5 py-3 bg-surface-container/40 border-l-2 border-tertiary rounded-sm min-w-0">
+            <div class="text-[10px] text-on-surface-variant font-label tracking-widest uppercase mb-1">Occupancy</div>
+            <div id="stat-occ" class="text-2xl font-headline font-bold text-tertiary leading-none">--%</div>
+          </div>
+          <div class="px-5 py-3 bg-surface-container/40 border-l-2 border-outline-variant/40 rounded-sm min-w-0">
+            <div class="text-[10px] text-on-surface-variant font-label tracking-widest uppercase mb-1">Buildings</div>
+            <div id="stat-bldg" class="text-2xl font-headline font-bold text-on-surface-variant leading-none">--</div>
+          </div>
         </div>
       </div>
-      <!-- Hidden stats targets kept so header occupancy + updateStats() still work -->
-      <div class="sr-only" aria-hidden="true">
-        <span id="stat-total">--</span>
-        <span id="stat-empty">--</span>
-        <span id="stat-occ">--%</span>
-        <span id="stat-bldg">--</span>
-      </div>
 
-      <button type="button" onclick="openFindRoom()"
-              class="w-full min-h-[52px] inline-flex items-center justify-center gap-2 px-5 py-3.5 bg-primary text-on-primary font-headline font-bold text-base rounded-sm hover:brightness-110 transition-all shadow-[0_0_20px_rgba(63,255,139,0.25)]">
-        <svg class="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>
-          <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
-        </svg>
-        Find me a room.
-      </button>
-
-      <div class="grid grid-cols-2 gap-3">
-        <button type="button" onclick="finderClosestChip()"
-                class="min-h-[44px] inline-flex items-center justify-center gap-1.5 px-2.5 py-2.5 border border-primary text-white font-headline font-bold text-xs sm:text-sm rounded-sm hover:bg-primary/10 transition-all">
-          <span class="material-symbols-outlined text-primary text-lg shrink-0">person</span>
-          <span class="leading-tight text-left">Closest to me.</span>
-        </button>
-        <button type="button" onclick="finderGapChip()"
-                class="min-h-[44px] inline-flex items-center justify-center gap-1.5 px-2.5 py-2.5 border border-primary text-white font-headline font-bold text-xs sm:text-sm rounded-sm hover:bg-primary/10 transition-all">
-          <span class="material-symbols-outlined text-primary text-lg shrink-0">schedule</span>
-          <span class="leading-tight text-left">Free during my gap.</span>
-        </button>
-      </div>
-
-      <section aria-labelledby="finder-best-heading" class="pt-2">
-        <h2 id="finder-best-heading" class="text-xl font-headline font-bold text-white mb-3">Best rooms for you.</h2>
-        <div id="dash-best-rooms" class="space-y-2"></div>
-        <div class="flex flex-col items-center gap-3 pt-5 pb-2">
-          <button type="button" onclick="switchView('map')"
-                  class="min-h-[44px] text-sm font-headline font-bold text-primary hover:underline underline-offset-4">
-            Explore campus map &gt;
-          </button>
-          <button type="button" onclick="switchView('rooms')"
-                  class="min-h-[44px] text-[11px] font-label uppercase tracking-widest text-on-surface-variant hover:text-white transition-colors">
-            View all rooms
-          </button>
+      <div class="grid grid-cols-12 gap-6">
+        <div class="flex col-span-12 lg:col-span-5 glass-card border border-primary/10 p-6 rounded-sm flex-col">
+          <div class="flex items-center justify-between mb-5">
+            <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-primary text-xl">star</span>
+              <h3 class="text-xs font-label uppercase tracking-[0.2em] text-on-surface">Best Rooms Right Now</h3>
+            </div>
+            <button onclick="switchView('rooms')" class="text-[9px] font-bold text-primary tracking-widest uppercase hover:opacity-70 transition-all">View All →</button>
+          </div>
+          <div id="dash-best-rooms" class="flex-1 space-y-2 overflow-y-auto"></div>
+          <div class="pt-4">
+            <button onclick="switchView('map')" class="w-full py-2 bg-primary/5 text-primary text-[10px] font-bold uppercase tracking-widest border border-primary/10 hover:bg-primary/20 transition-all">
+              Full Map ↗
+            </button>
+          </div>
         </div>
-      </section>
+      </div>
     </div>
   </div>
 
@@ -331,8 +342,6 @@
     <div class="max-w-[1400px] mx-auto py-6">
       <div class="flex items-center justify-between mb-6 border-b border-outline-variant/10 pb-4">
         <div>
-          <button type="button" onclick="switchView('dashboard')"
-                  class="text-[10px] text-primary font-label tracking-widest uppercase mb-1 hover:underline underline-offset-2">← Finder</button>
           <div id="rooms-view-semester" class="text-[10px] text-primary font-label tracking-widest uppercase mb-1">LIVE</div>
           <h2 class="text-3xl font-headline font-extrabold tracking-tighter text-white">AVAILABLE ROOMS</h2>
         </div>
@@ -454,8 +463,6 @@
 
       <!-- Header -->
       <div class="border-b border-outline-variant/10 pb-6">
-        <button type="button" onclick="switchView('dashboard')"
-                class="text-[10px] text-primary font-label tracking-widest uppercase mb-2 hover:underline underline-offset-2">← Finder</button>
         <div class="text-[10px] text-primary font-label tracking-widest uppercase mb-1">Configuration</div>
         <h2 class="text-4xl font-headline font-extrabold tracking-tighter text-white">Settings</h2>
         <p class="text-sm text-on-surface-variant mt-1">Manage schedule data and application configuration.</p>
@@ -770,28 +777,24 @@
 </div>
 
 <!-- MOBILE BOTTOM NAV: Find | Search | Map (Settings is the header gear) -->
-<nav aria-label="Primary" class="fixed bottom-0 left-0 right-0 bg-[#0a0a0a]/98 backdrop-blur-md border-t border-primary/10 flex md:hidden z-50"
-     style="padding-bottom:env(safe-area-inset-bottom, 0px)">
+<nav class="fixed bottom-0 left-0 right-0 bg-[#0a0a0a]/98 backdrop-blur-md border-t border-primary/10 flex md:hidden z-50" style="padding-bottom:env(safe-area-inset-bottom);height:calc(3.5rem + env(safe-area-inset-bottom))">
   <button id="mob-nav-find" type="button" onclick="switchView('dashboard')"
           aria-label="Find" aria-current="page"
-          class="flex-1 flex flex-col items-center justify-center gap-0.5 min-h-[44px] py-2 transition-colors">
-    <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="color:#3fff8b">
-      <circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>
-      <path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
-    </svg>
-    <span class="text-[10px] font-label tracking-wide" style="color:#3fff8b">Find</span>
+          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
+    <span class="material-symbols-outlined" style="font-size:20px;color:#3fff8b">grid_view</span>
+    <span class="text-[9px] font-label tracking-wide" style="color:#3fff8b">Find</span>
   </button>
   <button id="mob-nav-search" type="button" onclick="onMobileSearchTab()"
           aria-label="Search rooms and buildings"
-          class="flex-1 flex flex-col items-center justify-center gap-0.5 min-h-[44px] py-2 transition-colors">
+          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
     <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">search</span>
-    <span class="text-[10px] font-label tracking-wide" style="color:#adaaaa">Search</span>
+    <span class="text-[9px] font-label tracking-wide" style="color:#adaaaa">Search</span>
   </button>
   <button id="mob-nav-map" type="button" onclick="switchView('map')"
           aria-label="Map"
-          class="flex-1 flex flex-col items-center justify-center gap-0.5 min-h-[44px] py-2 transition-colors">
+          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
     <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">map</span>
-    <span class="text-[10px] font-label tracking-wide" style="color:#adaaaa">Map</span>
+    <span class="text-[9px] font-label tracking-wide" style="color:#adaaaa">Map</span>
   </button>
 </nav>
 

@@ -266,7 +266,7 @@ function setMobNavActive(id, on) {
   if (!btn) return;
   const color = on ? '#3fff8b' : '#adaaaa';
   btn.setAttribute('aria-current', on ? 'page' : 'false');
-  btn.querySelectorAll('span, svg').forEach(s => { s.style.color = color; });
+  btn.querySelectorAll('span').forEach(s => { s.style.color = color; });
 }
 
 function updateNavChrome() {
@@ -1058,18 +1058,11 @@ function _sortedBestRooms(rooms, limit) {
   }).slice(0, limit);
 }
 
-function formatFreeLabel(minutes) {
-  if (minutes === null || minutes === undefined) return 'Free all day';
-  if (minutes < 60) return `Free ${minutes}m`;
-  const h = Math.floor(minutes / 60), m = minutes % 60;
-  return m > 0 ? `Free ${h}h ${m}m` : `Free ${h}h`;
-}
-
 function renderBestRooms(rooms) {
   const container = $('dash-best-rooms');
   if (!container) return;
   container.innerHTML = '';
-  const best = _sortedBestRooms(rooms, 4);
+  const best = _sortedBestRooms(rooms, 6);
   if (!best.length) {
     container.innerHTML = `<div style="text-align:center;padding:32px;color:#484847;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em">No rooms available</div>`;
     return;
@@ -1077,20 +1070,25 @@ function renderBestRooms(rooms) {
   best.forEach(room => {
     const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
     const color = isSoon ? '#f59e0b' : '#3fff8b';
+    const barPct = room.minutes_until_next === null ? 100 : Math.min(100, room.minutes_until_next / 180 * 100);
     const row = document.createElement('div');
     row.className = 'interactive';
-    row.style.cssText = `display:flex;align-items:center;gap:12px;padding:12px 14px;background:transparent;border:1px solid rgba(63,255,139,0.22);border-radius:4px;cursor:pointer;transition:all 0.15s;min-height:52px`;
-    makeActivatable(row, `${buildingName(room.building)} room ${room.room}, ${formatFreeLabel(room.minutes_until_next)}. Open schedule.`,
+    row.style.cssText = `padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.04);border-radius:2px;cursor:pointer;transition:all 0.15s;min-height:44px`;
+    makeActivatable(row, `${buildingName(room.building)} room ${room.room}, ${formatTime(room.minutes_until_next)} free. Open schedule.`,
                     () => openRoomDetail(room.building, room.room));
-    row.addEventListener('mouseover', () => { row.style.background = 'rgba(63,255,139,0.06)'; row.style.borderColor = 'rgba(63,255,139,0.45)'; });
-    row.addEventListener('mouseout',  () => { row.style.background = 'transparent'; row.style.borderColor = 'rgba(63,255,139,0.22)'; });
+    row.addEventListener('mouseover', () => { row.style.background = 'rgba(63,255,139,0.05)'; row.style.borderColor = 'rgba(63,255,139,0.15)'; });
+    row.addEventListener('mouseout',  () => { row.style.background = 'rgba(255,255,255,0.02)'; row.style.borderColor = 'rgba(255,255,255,0.04)'; });
     row.innerHTML = `
-      <span class="material-symbols-outlined" style="font-size:22px;color:#3fff8b;flex-shrink:0">apartment</span>
-      <div style="flex:1;min-width:0">
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:800;color:#fff;line-height:1.2">${esc(room.building)} ${esc(room.room)}</div>
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:700;color:${color};margin-top:3px">${esc(formatFreeLabel(room.minutes_until_next))}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div>
+          <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:#767575;text-transform:uppercase;letter-spacing:0.1em">${room.building}</span>
+          <span style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:800;color:#fff;margin-left:8px">${room.room}</span>
+        </div>
+        <span style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:700;color:${color}">${formatTime(room.minutes_until_next)}</span>
       </div>
-      <span class="material-symbols-outlined" style="font-size:20px;color:#767575;flex-shrink:0">arrow_forward</span>`;
+      <div style="height:2px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden">
+        <div style="height:100%;width:${barPct}%;background:${color};opacity:0.5;transition:width 0.5s ease"></div>
+      </div>`;
     container.appendChild(row);
   });
 }
