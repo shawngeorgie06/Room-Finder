@@ -277,9 +277,11 @@ function switchView(view) {
         if (v === view) {
           nav.classList.add('active-nav');
           nav.classList.remove('text-on-surface-variant/60');
+          nav.setAttribute('aria-current', 'page');
         } else {
           nav.classList.remove('active-nav');
           nav.classList.add('text-on-surface-variant/60');
+          nav.removeAttribute('aria-current');
         }
       }
 
@@ -288,6 +290,11 @@ function switchView(view) {
       if (mob) {
         const color = v === view ? '#3fff8b' : '#adaaaa';
         mob.querySelectorAll('span').forEach(s => s.style.color = color);
+        if (v === view) {
+          mob.setAttribute('aria-current', 'page');
+        } else {
+          mob.removeAttribute('aria-current');
+        }
       }
     }
   });
