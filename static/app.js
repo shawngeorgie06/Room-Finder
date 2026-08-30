@@ -437,6 +437,9 @@ let searchDebounceTimer = null;
 let searchActiveIndex = -1;
 let searchFlatItems = [];
 let searchPanelOpen = false;
+// Bumped whenever a search render is superseded or the panel is dismissed, so
+// an in-flight runSearch cannot re-open a panel the user already closed.
+let searchRunSeq = 0;
 
 function normalizeSearchQuery(raw) {
   return String(raw || '').trim().toLowerCase().replace(/[-_/,]+/g, ' ').replace(/\s+/g, ' ');
@@ -654,6 +657,7 @@ function setSearchExpanded(expanded) {
 }
 
 function hideSearchPanel() {
+  searchRunSeq++;
   const el = $('search-results');
   if (el) {
     el.classList.add('hidden');
@@ -855,7 +859,10 @@ function fillRoomOption(btn, room) {
 }
 
 async function runSearch(rawQuery) {
+  const seq = ++searchRunSeq;
   await fetchAllRoomsCache();
+  // Superseded by a newer query, or the panel was dismissed while we awaited.
+  if (seq !== searchRunSeq) return;
   const model = buildSearchModel(rawQuery);
   const overlayOpen = isMobileSearchOpen();
   if (overlayOpen) {
@@ -918,11 +925,6 @@ function handleSearchNav(e) {
     const item = searchFlatItems[searchActiveIndex] || searchFlatItems[0];
     activateSearchItem(item);
   }
-}
-
-// Kept as a stable alias — older inline handlers and tests may call it.
-function globalSearch(query) {
-  onSearchInput(query);
 }
 
 function openMobileSearch() {

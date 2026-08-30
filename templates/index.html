@@ -93,6 +93,7 @@
     scrollbar-width: thin; scrollbar-color: rgba(63,255,139,0.15) transparent;
   }
   @media (max-width: 639px) {
+    .search-slash-hint { display: none; }
     .search-results-panel {
       position: fixed; left: 0.75rem; right: 0.75rem; top: 64px;
       max-height: calc(100vh - 64px - 4.5rem - env(safe-area-inset-bottom, 0px));
@@ -906,7 +907,6 @@
       spellcheck="false"
       class="w-full bg-surface-container border border-outline-variant/30 text-white text-sm font-label pl-10 pr-10 py-3 rounded-sm focus:outline-none focus:border-primary/60 placeholder:text-on-surface-variant/40"
     />
-    <kbd class="search-slash-hint" title="Press / to search" aria-hidden="true">/</kbd>
   </div>
   <div id="mobile-search-results" role="listbox" aria-label="Search suggestions"
        class="w-full max-w-sm flex-1 overflow-y-auto mt-4 pb-6"
