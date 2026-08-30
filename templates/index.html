@@ -285,7 +285,24 @@
 
   <!-- ═══ DASHBOARD VIEW ═══ -->
   <div id="view-dashboard" class="px-4 md:px-8 kinetic-grid min-h-screen">
-    <div class="max-w-[1600px] mx-auto space-y-8">
+    <div id="finder-home" class="max-w-[1600px] mx-auto space-y-8">
+
+      <!-- Campus map hero: the first thing on the home screen. A tap target,
+           not a manipulable map — drag and zoom belong to the Map tab, and
+           enabling them here would steal the page's scroll on touch. -->
+      <button id="home-hero" type="button" onclick="switchView('map')"
+              aria-label="Open the full campus map"
+              class="relative w-full h-[38vh] min-h-[220px] max-h-[340px] mt-4 rounded-xl overflow-hidden border border-primary/20 block text-left">
+        <div id="home-hero-map" class="absolute inset-0 z-0"></div>
+        <div class="absolute inset-x-0 bottom-0 z-10 flex items-end justify-between gap-3 p-4
+                    bg-gradient-to-t from-[#080808]/95 via-[#080808]/60 to-transparent pointer-events-none">
+          <div>
+            <div class="label text-primary mb-1">Campus now</div>
+            <div id="home-hero-stat" class="text-title text-white">-- rooms free</div>
+          </div>
+          <span class="label text-on-surface-variant whitespace-nowrap">Open map &rarr;</span>
+        </div>
+      </button>
 
       <!-- No-classes banner (weekend / holiday) -->
       <div id="dash-no-classes-banner" class="hidden mt-6 px-4 py-3 bg-surface-container border border-outline-variant/20 rounded-sm flex items-center gap-3">
@@ -332,25 +349,6 @@
 
       <!-- Dashboard Grid -->
       <div class="grid grid-cols-12 gap-6">
-
-        <!-- CAMPUS MAP (replaces heatmap) -->
-        <div class="col-span-12 xl:col-span-9 glass-card border border-primary/10 rounded-sm relative overflow-hidden min-h-[200px] md:min-h-[280px]">
-          <div class="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-5 py-3 bg-gradient-to-b from-[#080808]/95 to-transparent pointer-events-none">
-            <div>
-              <div class="text-label text-on-surface-variant/60 font-label tracking-[0.25em] uppercase mb-0.5">Campus Map</div>
-              <div class="text-sm font-headline font-bold text-white">Click a building to view floor plan</div>
-            </div>
-            <div class="flex items-center gap-3 pointer-events-auto">
-              <div class="flex items-center gap-3 text-label font-label text-on-surface-variant uppercase tracking-wider">
-                <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-primary inline-block"></span>Free</span>
-                <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>Half</span>
-                <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-secondary inline-block"></span>Busy</span>
-              </div>
-              <button onclick="switchView('map')" class="px-4 py-1.5 text-label font-bold bg-primary/10 border border-primary/30 text-primary rounded-sm uppercase tracking-widest hover:bg-primary/20 transition-all">Full Map ↗</button>
-            </div>
-          </div>
-          <div id="dash-map-container" class="absolute inset-0"></div>
-        </div>
 
         <!-- LIVE ROOM FEED -->
         <div class="col-span-12 xl:col-span-3 glass-card border border-primary/10 flex flex-col rounded-sm">

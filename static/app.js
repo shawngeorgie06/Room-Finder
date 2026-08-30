@@ -281,7 +281,7 @@ function switchView(view) {
     }
   });
   if (view === 'map')       initMap();
-  if (view === 'dashboard') initDashMap();
+  if (view === 'dashboard') initHomeHeroMap();
   if (view === 'settings')  fetchScheduleInfo();
   syncURL();
 }
@@ -299,6 +299,7 @@ async function fetchBuildings() {
     const data = await r.json();
     state.buildingsData = data;
     updateStats(data);
+    updateHomeHeroStat(data);
     renderBuildingChips(data);
     renderDashBuildingFilter(data);
     if (state.map)     updateBuildingMarkers(state.map,     state.markers,     data);
@@ -1361,19 +1362,35 @@ function initMap() {
   if (state.buildingsData.length) updateBuildingMarkers(state.map, state.markers, state.buildingsData);
 }
 
-function initDashMap() {
+// The home hero map. Deliberately inert: dragging and zoom are disabled so
+// it cannot capture the page's scroll on a touch device, and the whole hero
+// is a single tap target that opens the full Map view.
+function initHomeHeroMap() {
   if (state.dashMap) return;
-  const el = $('dash-map-container');
+  const el = $('home-hero-map');
   if (!el) return;
-  state.dashMap = L.map('dash-map-container', {
+  state.dashMap = L.map('home-hero-map', {
     center: [40.7424, -74.1779], zoom: 16,
-    zoomControl: true,
-    scrollWheelZoom: false,  // disabled so page can still scroll; activates on map click
+    zoomControl: false,
+    scrollWheelZoom: false,
+    dragging: false,
+    doubleClickZoom: false,
+    boxZoom: false,
+    keyboard: false,
+    touchZoom: false,
+    attributionControl: false,
   });
-  // Enable scroll wheel zoom when user clicks/interacts with the map
-  state.dashMap.on('click', () => state.dashMap.scrollWheelZoom.enable());
   makeTileLayers(state.dashMap);
-  if (state.buildingsData.length) updateBuildingMarkers(state.dashMap, state.dashMarkers, state.buildingsData);
+  if (state.buildingsData.length) {
+    updateBuildingMarkers(state.dashMap, state.dashMarkers, state.buildingsData);
+  }
+  // A Leaflet map sized by the layout renders blank until it re-measures.
+  setTimeout(() => { if (state.dashMap) state.dashMap.invalidateSize(); }, 60);
+}
+
+function updateHomeHeroStat(buildings) {
+  const free = buildings.reduce((s, b) => s + b.empty_rooms, 0);
+  setText('home-hero-stat', free === 1 ? '1 room free' : `${free} rooms free`);
 }
 
 // ── Building panel ──────────────────────────────────────────────────────────
@@ -2216,7 +2233,7 @@ async function init() {
   await refresh();
   nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
   updateCountdown();
-  initDashMap(); // init dashboard map after data is loaded
+  initHomeHeroMap(); // hero map needs data loaded for its markers
   fetchSemesterLabel();
   setInterval(scheduledRefresh, REFRESH_INTERVAL_MS);
 
