@@ -18,6 +18,24 @@
 <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css"/>
 <!-- Tailwind theme lives in tailwind.config.js; rebuild with `npm run build:css` -->
 <style>
+  /* Token mirror for JS-generated markup. app.js builds most of its UI as
+     inline style strings, which cannot reach Tailwind classes — these let it
+     use var(--free) instead of hardcoding #3fff8b at 44 call sites. */
+  :root {
+    --free:    #3fff8b;
+    --soon:    #f59e0b;
+    --busy:    #ff7166;
+    --unknown: #767575;
+
+    --text:    #ffffff;
+    --muted:   #adaaaa;
+    --faint:   #767575;
+
+    --surface:  #0e0e0e;
+    --raised:   #1a1919;
+    --hairline: rgba(63, 255, 139, 0.11);
+    --hairline-soft: rgba(255, 255, 255, 0.06);
+  }
   .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
   .kinetic-grid {
     background-image: radial-gradient(circle at 2px 2px, rgba(63, 255, 139, 0.05) 1px, transparent 0);
