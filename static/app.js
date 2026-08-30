@@ -142,6 +142,9 @@ function restoreStateFromURL() {
   }
 
   // Switch to the saved view (must happen after DOM is ready)
+  // 'buildings' is the new name for the home view; 'dashboard' is kept so
+  // links shared before the redesign keep working.
+  if (view === 'buildings') view = 'dashboard';
   if (view && ['dashboard','rooms','map','settings'].includes(view)) {
     switchView(view);
   }
@@ -256,28 +259,36 @@ setInterval(updateClock, 1000);
 
 // ── View switching ─────────────────────────────────────────────────────────
 function switchView(view) {
+  if (view === 'buildings') view = 'dashboard';
   state.view = view;
+  // Nav ids were collapsed to three destinations (buildings/map/saved); this
+  // maps each underlying view to the nav id that should highlight for it.
+  // 'settings' has no sidebar/mobile nav entry (it lives in the header gear).
+  const navIdForView = { dashboard: 'buildings', rooms: 'saved', map: 'map' };
   ['dashboard', 'rooms', 'map', 'settings'].forEach(v => {
     const el = $('view-' + v);
     if (el) el.classList.toggle('hidden', v !== view);
 
-    // Desktop sidebar nav
-    const nav = $('nav-' + v);
-    if (nav) {
-      if (v === view) {
-        nav.classList.add('active-nav');
-        nav.classList.remove('text-on-surface-variant/60');
-      } else {
-        nav.classList.remove('active-nav');
-        nav.classList.add('text-on-surface-variant/60');
+    const navId = navIdForView[v];
+    if (navId) {
+      // Desktop sidebar nav
+      const nav = $('nav-' + navId);
+      if (nav) {
+        if (v === view) {
+          nav.classList.add('active-nav');
+          nav.classList.remove('text-on-surface-variant/60');
+        } else {
+          nav.classList.remove('active-nav');
+          nav.classList.add('text-on-surface-variant/60');
+        }
       }
-    }
 
-    // Mobile bottom nav
-    const mob = $('mob-nav-' + v);
-    if (mob) {
-      const color = v === view ? '#3fff8b' : '#adaaaa';
-      mob.querySelectorAll('span').forEach(s => s.style.color = color);
+      // Mobile bottom nav
+      const mob = $('mob-nav-' + navId);
+      if (mob) {
+        const color = v === view ? '#3fff8b' : '#adaaaa';
+        mob.querySelectorAll('span').forEach(s => s.style.color = color);
+      }
     }
   });
   if (view === 'map')       initMap();

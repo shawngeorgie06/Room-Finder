@@ -67,3 +67,13 @@ def test_component_helpers_exist_and_use_tokens():
     assert 'var(--busy)' in helpers
     assert not re.search(r'#[0-9a-fA-F]{6}', helpers), \
         "component helpers must use var(--token), not hardcoded hex"
+
+
+def test_all_shareable_view_values_are_still_handled():
+    """Shared links are an advertised feature; these four must keep working."""
+    js = open(APP_JS, encoding='utf-8').read()
+    start = js.index('function restoreStateFromURL')
+    body = js[start:start + 2500]
+    for view in ('dashboard', 'rooms', 'map', 'settings'):
+        assert f"'{view}'" in body, f"view={view} no longer handled"
+    assert "'buildings'" in body, "view=buildings alias missing"

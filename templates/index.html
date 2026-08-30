@@ -191,6 +191,10 @@
     </div>
     <div id="hdr-clock" class="text-xs font-bold text-primary tabular-nums hidden md:block">--:--:--</div>
     <div id="hdr-countdown" class="text-label font-label text-on-surface-variant tabular-nums md:hidden">↻ <span id="hdr-countdown-secs">60</span>s</div>
+    <button id="hdr-settings" type="button" onclick="switchView('settings')" aria-label="Settings"
+            class="w-11 h-11 rounded-full bg-surface-container border border-outline-variant/20 flex items-center justify-center text-on-surface-variant hover:text-primary">
+      <span class="material-symbols-outlined">settings</span>
+    </button>
     <div class="hidden sm:flex w-9 h-9 rounded-sm bg-surface-container border border-outline-variant/20 items-center justify-center">
       <span class="material-symbols-outlined text-on-surface-variant">person</span>
     </div>
@@ -204,21 +208,17 @@
     <div id="sidebar-semester" class="text-label text-on-surface-variant font-label tracking-[0.2em] mt-1 opacity-50 uppercase">Live</div>
   </div>
   <nav class="flex-1 px-3 space-y-1">
-    <a id="nav-dashboard" href="#" onclick="switchView('dashboard');return false;"
+    <a id="nav-buildings" href="#" onclick="switchView('dashboard');return false;"
        class="active-nav px-4 py-3 flex items-center gap-3 transition-all font-headline text-sm tracking-tight rounded-sm">
-      <span class="material-symbols-outlined text-xl">grid_view</span><span>Dashboard</span>
-    </a>
-    <a id="nav-rooms" href="#" onclick="switchView('rooms');return false;"
-       class="text-on-surface-variant/60 px-4 py-3 flex items-center gap-3 hover:bg-surface-container hover:text-white transition-all font-headline text-sm tracking-tight rounded-sm">
-      <span class="material-symbols-outlined text-xl">meeting_room</span><span>Room Grid</span>
+      <span class="material-symbols-outlined text-xl">grid_view</span><span>Buildings</span>
     </a>
     <a id="nav-map" href="#" onclick="switchView('map');return false;"
        class="text-on-surface-variant/60 px-4 py-3 flex items-center gap-3 hover:bg-surface-container hover:text-white transition-all font-headline text-sm tracking-tight rounded-sm">
-      <span class="material-symbols-outlined text-xl">map</span><span>Campus Map</span>
+      <span class="material-symbols-outlined text-xl">map</span><span>Map</span>
     </a>
-    <a id="nav-settings" href="#" onclick="switchView('settings');return false;"
+    <a id="nav-saved" href="#" onclick="switchView('rooms');return false;"
        class="text-on-surface-variant/60 px-4 py-3 flex items-center gap-3 hover:bg-surface-container hover:text-white transition-all font-headline text-sm tracking-tight rounded-sm">
-      <span class="material-symbols-outlined text-xl">settings</span><span>Settings</span>
+      <span class="material-symbols-outlined text-xl">star</span><span>Saved</span>
     </a>
   </nav>
   <!-- Sidebar top rooms -->
@@ -356,7 +356,6 @@
         <div id="buildings-grid" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2"></div>
       </div>
 
-      </div>
     </div>
   </div>
 
@@ -799,38 +798,24 @@
   </div>
 </div>
 
-<!-- MOBILE FAB -->
-<button onclick="openFindRoom()"
-        class="fixed bottom-20 right-5 z-40 md:hidden flex items-center gap-2 pl-4 pr-5 py-3 bg-primary text-on-primary font-headline font-bold text-sm rounded-full shadow-[0_4px_24px_rgba(63,255,139,0.4)] hover:brightness-110 transition-all">
-  <span class="material-symbols-outlined text-lg">search</span>
-  Find Room
-</button>
-
 <!-- MOBILE BOTTOM NAV -->
-<nav class="fixed bottom-0 left-0 right-0 bg-[#0a0a0a]/98 backdrop-blur-md border-t border-primary/10 flex md:hidden z-50" style="padding-bottom:env(safe-area-inset-bottom);height:calc(3.5rem + env(safe-area-inset-bottom))">
-  <button id="mob-nav-dashboard" onclick="switchView('dashboard')"
-          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
+<nav class="fixed bottom-0 left-0 right-0 bg-[#0a0a0a]/98 backdrop-blur-md border-t border-primary/10 flex md:hidden z-50"
+     aria-label="Primary"
+     style="padding-bottom:env(safe-area-inset-bottom);height:calc(3.5rem + env(safe-area-inset-bottom))">
+  <button id="mob-nav-buildings" type="button" onclick="switchView('dashboard')" aria-label="Buildings"
+          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2">
     <span class="material-symbols-outlined" style="font-size:20px;color:#3fff8b">grid_view</span>
-    <span class="text-label font-label tracking-wide" style="color:#3fff8b">Dashboard</span>
+    <span class="label" style="color:#3fff8b">Buildings</span>
   </button>
-  <button id="mob-nav-rooms" onclick="switchView('rooms')"
-          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
-    <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">meeting_room</span>
-    <span class="text-label font-label tracking-wide" style="color:#adaaaa">Rooms</span>
-  </button>
-  <button onclick="toggleMobileSearch()" class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
-    <span id="mob-search-icon" class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">search</span>
-    <span class="text-label font-label tracking-wide" style="color:#adaaaa">Search</span>
-  </button>
-  <button id="mob-nav-map" onclick="switchView('map')"
-          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
+  <button id="mob-nav-map" type="button" onclick="switchView('map')" aria-label="Map"
+          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2">
     <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">map</span>
-    <span class="text-label font-label tracking-wide" style="color:#adaaaa">Map</span>
+    <span class="label" style="color:#adaaaa">Map</span>
   </button>
-  <button id="mob-nav-settings" onclick="switchView('settings')"
-          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2 transition-colors">
-    <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">settings</span>
-    <span class="text-label font-label tracking-wide" style="color:#adaaaa">Settings</span>
+  <button id="mob-nav-saved" type="button" onclick="switchView('rooms')" aria-label="Saved rooms"
+          class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2">
+    <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">star</span>
+    <span class="label" style="color:#adaaaa">Saved</span>
   </button>
 </nav>
 
