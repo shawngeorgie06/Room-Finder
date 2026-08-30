@@ -126,19 +126,31 @@ run.
 
 ### Screens
 
-**Buildings (home).** Grid of 18 building cards: code, full name, live free
-count (`20 free of 32`), status bar. Two controls — a *hide buildings with
-nothing free* toggle, and a sort (*most free* default, *nearest to me* when
-geolocation is granted). One prominent **Find me a room** action above the
-grid for students who do not want to choose.
+**Home.** Opens with a **live campus map hero** — roughly the top 40% of the
+first screen, buildings drawn as occupancy-coloured pins. This is the first
+big thing a student sees; spatial orientation ("what is near me") precedes
+choosing a building by name. Tapping the hero opens the full-screen Map.
+
+Below the hero, scrolling: the **Find me a room** action, then the grid of 18
+building cards — code, full name, live free count (`20 free of 32`), status
+bar. Two controls: a *hide buildings with nothing free* toggle, and a sort
+(*most free* default, *nearest to me* when geolocation is granted).
+
+The hero and the Map tab are deliberately not the same surface. The hero
+orients; the tab explores. The hero is non-interactive apart from a single
+tap target, so it cannot compete with the list for scroll gestures — this is
+what keeps the duplication honest rather than a repeat of the old
+dashboard's embedded map.
 
 **Building detail.** Replaces the current floor panel. Rooms grouped by
 floor with real headers; each room shows number, status, time remaining. The
 weekly busyness **heatmap moves here**, where it is contextual, rather than
 sitting campus-wide on the home screen.
 
-**Map.** The existing Leaflet campus map, essentially unchanged. It stops
-being duplicated on the home screen.
+**Map.** The existing Leaflet campus map, full-screen and essentially
+unchanged: pan, zoom, click a building to open its detail. This is the
+explore surface the home hero taps through to. The two share one Leaflet
+setup and one data source, but not one instance — see Section 3.
 
 **Saved.** Pinned rooms. Currently a `★` on room cards with no home of its
 own. A tab makes the app stateful for returning students at near-zero cost.
@@ -172,7 +184,10 @@ Existing shared links must not break.
 | Live Room Feed | Folded into the buildings grid's live counts |
 | Currently Available Rooms | The `rooms` view already does this |
 | Available Room Directory | Same — third copy of one dataset |
-| Dashboard embedded map | The Map tab |
+
+The dashboard's embedded map is **not** demoted. It is promoted to the home
+hero (see Screens above), replacing the old `dash-map-container` panel that
+sat below the fold among four competing cards.
 
 The three-way duplication resolves by consolidation: one flat room list at
 `view=rooms`, reachable but not competing for the home screen.
@@ -193,6 +208,23 @@ The three-way duplication resolves by consolidation: one flat room list at
   chips and the `w-9 h-9` header buttons.
 - `body` currently carries `overflow-x-hidden`, which masks layout overflow
   rather than preventing it. Fix the causes; keep the guard as a backstop.
+
+### Two Leaflet instances
+
+The home hero and the Map tab are separate Leaflet instances, as
+`initDashMap()` and `initMap()` already are today. They must not share one,
+because Leaflet binds an instance to a single container element.
+
+Two known hazards, both already present in the current code and both
+regression risks when the hero moves above the fold:
+
+- A map initialised in a hidden or zero-height container renders blank.
+  `initMap()` is called on view switch for this reason; the hero needs the
+  same treatment plus an `invalidateSize()` after layout settles.
+- Scroll trapping. The hero sits above a scrolling list on a touch device,
+  so it must keep `scrollWheelZoom: false` and `dragging: false`. The hero
+  is a tap target, not a manipulable map; drag and zoom belong to the Map
+  tab. This is what stops the hero from stealing the page's scroll.
 
 ### Verification
 
@@ -218,7 +250,7 @@ slices rather than one reveal.
 ## Sequence
 
 1. Foundation (tokens, radius, type, spacing, JS component seam)
-2. Buildings home
+2. Home: map hero + buildings grid
 3. Building detail
 4. Map and Saved
 5. Planning sheet and Settings
@@ -227,9 +259,27 @@ slices rather than one reveal.
 Each slice is a separate commit on `redesign`, independently revertable, and
 reviewed by the user before the next begins.
 
+## Demo
+
+A visual mockup of slices 1 and 2, built from live API data for Tuesday
+2:05 PM, was reviewed and approved:
+https://claude.ai/code/artifact/a9c5f96c-4ef7-4922-ad5a-b1863654fd3a
+
+Two decisions made in the demo, beyond the original spec, both approved:
+
+- Building cards show an occupancy **bar plus `9 of 20`** rather than a
+  percentage. "55% occupied" requires arithmetic to answer "can I get a
+  room".
+- Building detail shows in-use rooms **greyed out rather than hidden**, so
+  the list conveys the building's size instead of appearing suspiciously
+  short.
+
+Density was reviewed and confirmed: the airier treatment is correct, not a
+regression from the current instrument-panel density.
+
 ## Open questions
 
-None. All design decisions resolved during brainstorming.
+None. All design decisions resolved during brainstorming and demo review.
 
 ## Related work
 
