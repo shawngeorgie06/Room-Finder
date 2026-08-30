@@ -281,7 +281,7 @@ function switchView(view) {
     }
   });
   if (view === 'map')       initMap();
-  if (view === 'dashboard') initHomeHeroMap();
+  if (view === 'dashboard') showHomeHeroMap();
   if (view === 'settings')  fetchScheduleInfo();
   syncURL();
 }
@@ -1384,6 +1384,17 @@ function initHomeHeroMap() {
   if (state.buildingsData.length) {
     updateBuildingMarkers(state.dashMap, state.dashMarkers, state.buildingsData);
   }
+}
+
+// Construct the hero map if needed (the guard inside initHomeHeroMap()
+// prevents double-construction), then always re-measure it. A re-measure is
+// needed on every call, not just the first: if a deep link lands on another
+// view first, #view-dashboard is display:none while initHomeHeroMap() runs,
+// so its container has zero size and any invalidateSize() at that point is a
+// no-op. Called from both switchView()'s dashboard branch and init() so the
+// two paths can't drift apart again.
+function showHomeHeroMap() {
+  initHomeHeroMap();
   // A Leaflet map sized by the layout renders blank until it re-measures.
   setTimeout(() => { if (state.dashMap) state.dashMap.invalidateSize(); }, 60);
 }
@@ -2233,7 +2244,7 @@ async function init() {
   await refresh();
   nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
   updateCountdown();
-  initHomeHeroMap(); // hero map needs data loaded for its markers
+  showHomeHeroMap(); // hero map needs data loaded for its markers; re-measures even if view was hidden
   fetchSemesterLabel();
   setInterval(scheduledRefresh, REFRESH_INTERVAL_MS);
 
