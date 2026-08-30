@@ -26,3 +26,6 @@ uploaded_schedule*
 # Local virtualenv
 .venv/
 venv/
+
+# SDD scratch workspace (subagent-driven development)
+.superpowers/
