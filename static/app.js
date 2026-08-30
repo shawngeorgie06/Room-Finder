@@ -244,7 +244,7 @@ function groupLabel(text) {
   return el;
 }
 
-// ── Global search (grouped as-you-type autocomplete) ───────────────────────
+// ── End component helpers ──────────────────────────────────────────────────
 
 // ── Clock ──────────────────────────────────────────────────────────────────
 function updateClock() {
@@ -445,6 +445,7 @@ function applyThreshold() {
   syncURL();
 }
 
+// ── Global search (grouped as-you-type autocomplete) ───────────────────────
 const SEARCH_STOPWORDS = new Set(['floor', 'fl', 'the', 'room', 'rooms', 'building', 'bldg', 'hall', 'at']);
 const FLOOR_ALIASES = {
   ground: 0, grd: 0, gnd: 0, basement: 0, bsmt: 0,

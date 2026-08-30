@@ -59,8 +59,8 @@ def test_component_helpers_exist_and_use_tokens():
     for fn in ('function roomStatus', 'function statusPill', 'function groupLabel'):
         assert fn in js, f"missing helper: {fn}"
 
-    start = js.index('function roomStatus')
-    end = js.index('// ── Global search')
+    start = js.index('// ── Component helpers')
+    end = js.index('// ── End component helpers')
     helpers = js[start:end]
     assert 'var(--free)' in helpers
     assert 'var(--soon)' in helpers
