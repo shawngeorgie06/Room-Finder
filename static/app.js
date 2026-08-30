@@ -57,6 +57,8 @@ const state = {
   dayAt: '',       // day override ('Monday'…'Sunday', empty = today)
   freeAllDay: false, // show only rooms free for rest of day
   soonThresholdMins: 30,  // configurable "busy soon" threshold in minutes
+  hideFullBuildings: true,  // hide buildings with nothing free (home grid)
+  buildingSort: 'free',     // home grid ranking: 'free' | 'distance'
   map: null,       // full-screen map view instance
   dashMap: null,   // dashboard embedded map instance
   markers: {},
@@ -86,7 +88,6 @@ function togglePin(b, r) {
   pins = pins.includes(key) ? pins.filter(p => p !== key) : [...pins, key];
   localStorage.setItem('pinnedRooms', JSON.stringify(pins));
   if (state.lastRoomsData.length) {
-    renderDashRooms(state.lastRoomsData);
     renderRoomsGrid(state.lastRoomsData);
   }
 }
@@ -114,7 +115,7 @@ function syncURL() {
 function restoreStateFromURL() {
   const params = new URLSearchParams(window.location.search);
 
-  const view     = params.get('view');
+  let view       = params.get('view');
   const building = params.get('building');
   const at       = params.get('at');
   const forMins  = params.get('for');
@@ -142,6 +143,9 @@ function restoreStateFromURL() {
   }
 
   // Switch to the saved view (must happen after DOM is ready)
+  // 'buildings' is the new name for the home view; 'dashboard' is kept so
+  // links shared before the redesign keep working.
+  if (view === 'buildings') view = 'dashboard';
   if (view && ['dashboard','rooms','map','settings'].includes(view)) {
     switchView(view);
   }
@@ -210,6 +214,42 @@ function occColor(pct) {
   return '#3fff8b';
 }
 
+// ── Component helpers ──────────────────────────────────────────────────────
+// app.js builds most of its UI as inline style strings. These read colour
+// from the :root custom properties in index.html so the palette lives in one
+// place rather than being retyped at every call site.
+
+function roomStatus(room) {
+  if (room.empty === false) {
+    return { kind: 'busy', text: 'In use', cssVar: 'var(--busy)' };
+  }
+  const mins = room.minutes_until_next;
+  if (mins !== null && mins !== undefined && mins <= state.soonThresholdMins) {
+    return { kind: 'soon', text: formatTime(mins), cssVar: 'var(--soon)' };
+  }
+  return { kind: 'free', text: formatTime(mins), cssVar: 'var(--free)' };
+}
+
+function statusPill(room) {
+  const st = roomStatus(room);
+  const el = document.createElement('span');
+  el.className = 'label';
+  el.style.cssText = `color:${st.cssVar};white-space:nowrap;flex-shrink:0`;
+  el.textContent = st.text;
+  return el;
+}
+
+function groupLabel(text) {
+  const el = document.createElement('div');
+  el.className = 'label';
+  el.setAttribute('role', 'presentation');
+  el.style.cssText = 'color:var(--faint);padding:10px 2px 6px';
+  el.textContent = text;
+  return el;
+}
+
+// ── End component helpers ──────────────────────────────────────────────────
+
 // ── Clock ──────────────────────────────────────────────────────────────────
 function updateClock() {
   const t = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
@@ -220,34 +260,232 @@ setInterval(updateClock, 1000);
 
 // ── View switching ─────────────────────────────────────────────────────────
 function switchView(view) {
+  if (view === 'buildings') view = 'dashboard';
   state.view = view;
+  // Nav ids were collapsed to three destinations (buildings/map/saved); this
+  // maps each underlying view to the nav id that should highlight for it.
+  // 'settings' has no sidebar/mobile nav entry (it lives in the header gear).
+  const navIdForView = { dashboard: 'buildings', rooms: 'saved', map: 'map' };
   ['dashboard', 'rooms', 'map', 'settings'].forEach(v => {
     const el = $('view-' + v);
     if (el) el.classList.toggle('hidden', v !== view);
 
-    // Desktop sidebar nav
-    const nav = $('nav-' + v);
-    if (nav) {
-      if (v === view) {
-        nav.classList.add('active-nav');
-        nav.classList.remove('text-on-surface-variant/60');
-      } else {
-        nav.classList.remove('active-nav');
-        nav.classList.add('text-on-surface-variant/60');
+    const navId = navIdForView[v];
+    if (navId) {
+      // Desktop sidebar nav
+      const nav = $('nav-' + navId);
+      if (nav) {
+        if (v === view) {
+          nav.classList.add('active-nav');
+          nav.classList.remove('text-on-surface-variant/60');
+          nav.setAttribute('aria-current', 'page');
+        } else {
+          nav.classList.remove('active-nav');
+          nav.classList.add('text-on-surface-variant/60');
+          nav.removeAttribute('aria-current');
+        }
       }
-    }
 
-    // Mobile bottom nav
-    const mob = $('mob-nav-' + v);
-    if (mob) {
-      const color = v === view ? '#3fff8b' : '#adaaaa';
-      mob.querySelectorAll('span').forEach(s => s.style.color = color);
+      // Mobile bottom nav
+      const mob = $('mob-nav-' + navId);
+      if (mob) {
+        const color = v === view ? '#3fff8b' : '#adaaaa';
+        mob.querySelectorAll('span').forEach(s => s.style.color = color);
+        if (v === view) {
+          mob.setAttribute('aria-current', 'page');
+        } else {
+          mob.removeAttribute('aria-current');
+        }
+      }
     }
   });
   if (view === 'map')       initMap();
-  if (view === 'dashboard') initDashMap();
+  if (view === 'dashboard') showHomeHeroMap();
   if (view === 'settings')  fetchScheduleInfo();
   syncURL();
+}
+
+// ── Buildings grid (home) ───────────────────────────────────────────────────
+function renderBuildingsGrid(buildings) {
+  const container = $('buildings-grid');
+  if (!container) return;
+  container.textContent = '';
+
+  const visible = state.hideFullBuildings
+    ? buildings.filter(b => b.empty_rooms > 0)
+    : buildings.slice();
+
+  if (state.buildingSort === 'distance' && state.userPos) {
+    // Buildings we have no coordinates for sink to the bottom rather than
+    // sorting as if they were underfoot.
+    visible.sort((a, b) => {
+      const da = buildingDistanceMeters(a.building);
+      const db = buildingDistanceMeters(b.building);
+      if (da === null && db === null) return b.empty_rooms - a.empty_rooms;
+      if (da === null) return 1;
+      if (db === null) return -1;
+      return da - db;
+    });
+  } else {
+    visible.sort((a, b) => b.empty_rooms - a.empty_rooms);
+  }
+
+  if (!visible.length) {
+    const empty = document.createElement('div');
+    empty.className = 'label';
+    empty.style.cssText = 'color:var(--muted);padding:32px 4px;text-align:center';
+    empty.textContent = 'No buildings have free rooms right now';
+    container.appendChild(empty);
+    return;
+  }
+
+  visible.forEach(b => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.setAttribute('aria-label',
+      `${buildingName(b.building)}, ${b.empty_rooms} of ${b.total_rooms} rooms free`);
+    card.style.cssText = 'display:flex;align-items:center;gap:12px;width:100%;min-height:64px;' +
+      'padding:12px 14px;background:var(--raised);border:1px solid var(--hairline-soft);' +
+      'border-radius:10px;text-align:left;cursor:pointer';
+    card.addEventListener('click', () => openBuildingPanel(b));
+
+    const freePct = b.total_rooms ? Math.round(b.empty_rooms / b.total_rooms * 100) : 0;
+    // Show the distance when we have one — a list sorted by a key the reader
+    // cannot see is hard to trust. But suppress it when the fix is too coarse
+    // to rank with: printing "304 m" off a +/-400 m fix claims a precision we
+    // just told the user we do not have.
+    const usable = state.userPos && locationQuality(state.userPos.accuracy).tier !== 'unusable';
+    const dist = usable ? buildingDistanceMeters(b.building) : null;
+    const distLabel = dist === null ? '' :
+      (dist >= 1000 ? `${(dist / 1000).toFixed(1)} km` : `${Math.round(dist)} m`);
+    if (distLabel) {
+      card.setAttribute('aria-label',
+        `${buildingName(b.building)}, ${b.empty_rooms} of ${b.total_rooms} rooms free, ${distLabel} away`);
+    }
+    card.innerHTML = `
+      <div style="width:52px;flex:none;font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:700;color:var(--text)">${esc(b.building)}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(buildingName(b.building))}${distLabel ? ` &middot; ${distLabel}` : ''}</div>
+        <div style="height:4px;border-radius:9999px;background:rgba(255,255,255,0.07);margin-top:7px;overflow:hidden">
+          <div style="height:100%;width:${freePct}%;border-radius:9999px;background:var(--free)"></div>
+        </div>
+      </div>
+      <div style="text-align:right;flex:none">
+        <div style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--free);line-height:1.15">${b.empty_rooms}</div>
+        <div class="label" style="color:var(--faint)">of ${b.total_rooms}</div>
+      </div>`;
+    container.appendChild(card);
+  });
+}
+
+
+
+function toggleHideFull() {
+  state.hideFullBuildings = !state.hideFullBuildings;
+  renderBuildingsControls(state.buildingsData);
+  renderBuildingsGrid(state.buildingsData);
+  const n = state.buildingsData.filter(b => b.empty_rooms > 0).length;
+  announce(state.hideFullBuildings
+    ? `Showing ${n} buildings with free rooms.`
+    : `Showing all ${state.buildingsData.length} buildings.`);
+}
+
+function renderBuildingsControls(buildings) {
+  const container = $('buildings-controls');
+  if (!container) return;
+  container.textContent = '';
+
+  const on = state.hideFullBuildings;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'label';
+  btn.setAttribute('role', 'switch');
+  btn.setAttribute('aria-checked', on ? 'true' : 'false');
+  btn.style.cssText = 'display:flex;align-items:center;gap:8px;min-height:44px;padding:8px 14px;' +
+    'border-radius:9999px;cursor:pointer;' +
+    (on ? 'color:var(--free);background:rgba(63,255,139,0.09);border:1px solid rgba(63,255,139,0.28)'
+        : 'color:var(--muted);background:transparent;border:1px solid var(--hairline-soft)');
+  btn.textContent = 'Hide full';
+  btn.addEventListener('click', toggleHideFull);
+
+  const track = document.createElement('span');
+  track.setAttribute('aria-hidden', 'true');
+  track.style.cssText = 'width:22px;height:12px;border-radius:9999px;position:relative;flex:none;' +
+    (on ? 'background:rgba(63,255,139,0.32)' : 'background:rgba(255,255,255,0.12)');
+  const knob = document.createElement('span');
+  knob.style.cssText = 'position:absolute;top:1.5px;width:9px;height:9px;border-radius:9999px;' +
+    (on ? 'right:1.5px;background:var(--free)' : 'left:1.5px;background:var(--faint)');
+  track.appendChild(knob);
+  btn.appendChild(track);
+  container.appendChild(btn);
+
+  const distanceOn = state.buildingSort === 'distance';
+  const sortBtn = document.createElement('button');
+  sortBtn.type = 'button';
+  sortBtn.id = 'buildings-sort';
+  sortBtn.className = 'label';
+  sortBtn.setAttribute('aria-pressed', distanceOn ? 'true' : 'false');
+  sortBtn.style.cssText = 'display:flex;align-items:center;gap:7px;min-height:44px;padding:8px 14px;' +
+    'border-radius:9999px;cursor:pointer;' +
+    (distanceOn ? 'color:var(--free);background:rgba(63,255,139,0.09);border:1px solid rgba(63,255,139,0.28)'
+                : 'color:var(--muted);background:transparent;border:1px solid var(--hairline-soft)');
+  sortBtn.textContent = distanceOn ? 'Nearest' : 'Most free';
+  sortBtn.addEventListener('click', () => setBuildingSort(distanceOn ? 'free' : 'distance'));
+  container.appendChild(sortBtn);
+
+  const count = document.createElement('span');
+  count.className = 'label';
+  count.style.cssText = 'color:var(--faint);white-space:nowrap';
+  const shown = on ? buildings.filter(b => b.empty_rooms > 0).length : buildings.length;
+  count.textContent = `${shown} shown`;
+  container.appendChild(count);
+}
+
+function setBuildingsGeoStatus(msg, color) {
+  const el = $('buildings-geo-status');
+  if (!el) return;
+  if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
+  el.textContent = msg;
+  el.style.color = color || 'var(--faint)';
+  el.classList.remove('hidden');
+}
+
+// Ranking the home grid by distance. Shares state.userPos with Find Me a Room,
+// so granting permission on either surface benefits the other.
+async function setBuildingSort(mode) {
+  if (mode === 'distance') {
+    if (!state.userPos || isPositionStale(state.userPos, Date.now())) {
+      setBuildingsGeoStatus('Getting your location…');
+      try {
+        await requestLocation();
+      } catch (err) {
+        setBuildingsGeoStatus(
+          err && err.code === 1
+            ? 'Location permission denied — sorted by most free instead.'
+            : 'Could not get your location — sorted by most free instead.',
+          'var(--soon)');
+        state.buildingSort = 'free';
+        renderBuildingsControls(state.buildingsData);
+        renderBuildingsGrid(state.buildingsData);
+        return;
+      }
+    }
+    const q = locationQuality(state.userPos.accuracy);
+    if (q.tier === 'unusable') {
+      setBuildingsGeoStatus(q.message + ' Sorted by most free instead.', 'var(--soon)');
+      state.buildingSort = 'free';
+      renderBuildingsControls(state.buildingsData);
+      renderBuildingsGrid(state.buildingsData);
+      return;
+    }
+    setBuildingsGeoStatus(q.tier === 'coarse' ? q.message : '', 'var(--soon)');
+  } else {
+    setBuildingsGeoStatus('');
+  }
+  state.buildingSort = mode;
+  renderBuildingsControls(state.buildingsData);
+  renderBuildingsGrid(state.buildingsData);
+  announce(mode === 'distance' ? 'Buildings sorted by distance.' : 'Buildings sorted by most free.');
 }
 
 // ── Fetch data ─────────────────────────────────────────────────────────────
@@ -263,11 +501,13 @@ async function fetchBuildings() {
     const data = await r.json();
     state.buildingsData = data;
     updateStats(data);
-    renderHealthBars(data);
+    updateHomeHeroStat(data);
     renderBuildingChips(data);
-    renderDashBuildingFilter(data);
+    renderBuildingsControls(data);
+    renderBuildingsGrid(data);
     if (state.map)     updateBuildingMarkers(state.map,     state.markers,     data);
-    if (state.dashMap) updateBuildingMarkers(state.dashMap, state.dashMarkers, data);
+    // Hero markers stay non-interactive on every refresh, not just at init.
+    if (state.dashMap) updateBuildingMarkers(state.dashMap, state.dashMarkers, data, { interactive: false });
     // Show no-classes banner if all buildings have 0 occupied rooms and no day override
     const totalOccupied = data.reduce((s, b) => s + b.occupied_rooms, 0);
     const isWeekendOrHoliday = !state.dayAt && totalOccupied === 0 && data.length > 0;
@@ -326,11 +566,7 @@ async function fetchRooms() {
     // Free all day filter
     if (state.freeAllDay) data = data.filter(r => r.minutes_until_next === null);
     state.lastRoomsData = data;
-    renderLiveFeed(data);
-    renderDashRooms(data);
-    renderRoomsTable(data);
     renderRoomsGrid(data);
-    renderBestRooms(data);
     renderSidebarTopRooms(data);
     const t = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
     setText('sidebar-status', `${data.length} rooms free · ${t}`);
@@ -358,12 +594,6 @@ function updateStats(buildings) {
   setText('hdr-occ', occ);
   const dayFull = state.dayAt || new Date().toLocaleDateString('en-US', { weekday: 'long' });
   setText('hdr-day', dayFull);
-  setText('health-sections', (totalRooms * 3).toLocaleString());
-  setText('health-bldg', buildings.length);
-  setText('health-occ', occ + '%');
-  const bar = $('health-bar');
-  if (bar) bar.style.width = occ + '%';
-  setText('health-bar-label', `Schedule coverage ${occ}%`);
 }
 
 
@@ -409,10 +639,7 @@ function toggleFilterMore() {
 function applyThreshold() {
   const sel = $('soon-threshold-select');
   if (sel) state.soonThresholdMins = parseInt(sel.value) || 30;
-  // Re-render with existing data (no new fetch needed — threshold is display-only)
-  if (state.allRoomsData.length)    renderLiveFeed(state.allRoomsData);
-  if (state.buildingsData.length)   renderHealthBars(state.buildingsData);
-  // Re-fetch rooms so renderRoomsGrid and renderDashRooms get fresh calls
+  // Re-fetch rooms so renderRoomsGrid gets fresh calls
   fetchRooms();
   syncURL();
 }
@@ -969,40 +1196,6 @@ function _sortedBestRooms(rooms, limit) {
   }).slice(0, limit);
 }
 
-function renderBestRooms(rooms) {
-  const container = $('dash-best-rooms');
-  if (!container) return;
-  container.innerHTML = '';
-  const best = _sortedBestRooms(rooms, 6);
-  if (!best.length) {
-    container.innerHTML = `<div style="text-align:center;padding:32px;color:#484847;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em">No rooms available</div>`;
-    return;
-  }
-  best.forEach(room => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
-    const color = isSoon ? '#f59e0b' : '#3fff8b';
-    const barPct = room.minutes_until_next === null ? 100 : Math.min(100, room.minutes_until_next / 180 * 100);
-    const row = document.createElement('div');
-    row.className = 'interactive';
-    row.style.cssText = `padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.04);border-radius:2px;cursor:pointer;transition:all 0.15s;min-height:44px`;
-    makeActivatable(row, `${buildingName(room.building)} room ${room.room}, ${formatTime(room.minutes_until_next)} free. Open schedule.`,
-                    () => openRoomDetail(room.building, room.room));
-    row.addEventListener('mouseover', () => { row.style.background = 'rgba(63,255,139,0.05)'; row.style.borderColor = 'rgba(63,255,139,0.15)'; });
-    row.addEventListener('mouseout',  () => { row.style.background = 'rgba(255,255,255,0.02)'; row.style.borderColor = 'rgba(255,255,255,0.04)'; });
-    row.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <div>
-          <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:#767575;text-transform:uppercase;letter-spacing:0.1em">${room.building}</span>
-          <span style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:800;color:#fff;margin-left:8px">${room.room}</span>
-        </div>
-        <span style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:700;color:${color}">${formatTime(room.minutes_until_next)}</span>
-      </div>
-      <div style="height:2px;background:rgba(255,255,255,0.06);border-radius:2px;overflow:hidden">
-        <div style="height:100%;width:${barPct}%;background:${color};opacity:0.5;transition:width 0.5s ease"></div>
-      </div>`;
-    container.appendChild(row);
-  });
-}
 
 function renderSidebarTopRooms(rooms) {
   const container = $('sidebar-top-rooms');
@@ -1034,133 +1227,13 @@ function renderSidebarTopRooms(rooms) {
   });
 }
 
-function renderHealthBars(buildings) {
-  const container = $('building-bars');
-  if (!container) return;
-  container.textContent = '';
-  const maxTotal = Math.max(...buildings.map(b => b.total_rooms), 1);
-  buildings.slice(0, 14).forEach(b => {
-    const bar = document.createElement('div');
-    const h = Math.max(8, Math.round((b.total_rooms / maxTotal) * 80));
-    const color = occColor(b.occupancy_pct);
-    bar.style.cssText = `flex:1;background:${color}33;height:${h}px;min-height:8px;border-radius:2px;transition:all 0.3s;cursor:pointer`;
-    bar.title = `${b.building}: ${b.occupancy_pct}% occupied`;
-    bar.addEventListener('mouseover', () => { bar.style.background = color + '88'; });
-    bar.addEventListener('mouseout',  () => { bar.style.background = color + '33'; });
-    container.appendChild(bar);
-  });
-}
-
 // ── Live feed (dashboard) ──────────────────────────────────────────────────
-function renderLiveFeed(rooms) {
-  const container = $('live-feed');
-  if (!container) return;
-  container.textContent = '';
-  const t = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
-  rooms.slice(0, 10).forEach(room => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
-    const color = isSoon ? '#f59e0b' : '#3fff8b';
-    const label = isSoon ? 'Closing soon' : 'Available';
-    const item = document.createElement('div');
-    item.className = 'relative pl-6 border-l';
-    item.style.borderColor = color + '33';
-    item.innerHTML = `
-      <div class="absolute -left-1 top-0 w-2 h-2 rounded-full" style="background:${color};box-shadow:0 0 5px ${color}"></div>
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;color:${color};margin-bottom:3px;letter-spacing:0.1em">${t} // ${label}</div>
-      <p style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:700;color:#fff;margin-bottom:2px">${room.building}-${room.room}</p>
-      <p style="font-family:'Space Grotesk',sans-serif;font-size:10px;color:#adaaaa;line-height:1.4">${room.minutes_until_next === null ? 'Free for the rest of the day.' : `Next class in ${room.minutes_until_next} minutes.`}</p>`;
-    container.appendChild(item);
-  });
-  if (!rooms.length) {
-    container.innerHTML = `<p style="font-family:'Space Grotesk',sans-serif;font-size:10px;color:#767575;text-align:center;padding:40px 0;text-transform:uppercase;letter-spacing:0.1em">No rooms available</p>`;
-  }
-}
 
 // ── Dashboard mini room grid ───────────────────────────────────────────────
-function renderDashRooms(rooms) {
-  const container = $('dash-rooms');
-  if (!container) return;
-  container.textContent = '';
-  pinSort(rooms).slice(0, 12).forEach(room => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
-    const color = isSoon ? '#f59e0b' : '#3fff8b';
-    const cell = document.createElement('div');
-    cell.className = 'interactive';
-    cell.style.cssText = `background:${color}10;border:1px solid ${color}30;padding:8px;border-radius:2px;cursor:pointer;transition:background 0.15s;position:relative;min-height:44px`;
-    const pinned = isPinned(room.building, room.room);
-    const pin = document.createElement('button');
-    pin.type = 'button';
-    pin.textContent = pinned ? '★' : '☆';
-    pin.title = pinned ? 'Unpin' : 'Pin to top';
-    pin.setAttribute('aria-pressed', String(pinned));
-    pin.setAttribute('aria-label', `${pinned ? 'Unpin' : 'Pin'} ${room.building} ${room.room}`);
-    pin.style.cssText = `position:absolute;top:0;right:0;font-size:13px;cursor:pointer;color:${pinned ? '#3fff8b' : '#8a8a89'};z-index:2;line-height:1;background:none;border:none;padding:8px;min-width:32px;min-height:32px`;
-    pin.addEventListener('click', e => { e.stopPropagation(); togglePin(room.building, room.room); });
-    pin.addEventListener('keydown', e => e.stopPropagation());
-    cell.appendChild(pin);
-    cell.title = `${room.building}-${room.room} · tap for schedule`;
-    makeActivatable(cell, `${buildingName(room.building)} room ${room.room}. Open schedule.`,
-                    () => openRoomDetail(room.building, room.room));
-    cell.onmouseover = () => { cell.style.background = `${color}20`; };
-    cell.onmouseout  = () => { cell.style.background = `${color}10`; };
-    const _dcBldg = document.createElement('div');
-    _dcBldg.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:600;color:#767575;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px";
-    _dcBldg.textContent = room.building;
-    const _dcRoom = document.createElement('div');
-    _dcRoom.style.cssText = `font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:800;color:#fff`;
-    _dcRoom.textContent = room.room;
-    const _dcStatus = document.createElement('div');
-    _dcStatus.style.cssText = 'display:flex;align-items:center;gap:4px;margin-top:4px';
-    const _dcDot = document.createElement('span');
-    _dcDot.style.cssText = `width:5px;height:5px;border-radius:50%;background:${color};display:inline-block;flex-shrink:0`;
-    const _dcLabel = document.createElement('span');
-    _dcLabel.style.cssText = `font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.08em`;
-    _dcLabel.textContent = isSoon ? 'Closing soon' : 'Open';
-    _dcStatus.appendChild(_dcDot);
-    _dcStatus.appendChild(_dcLabel);
-    cell.appendChild(_dcBldg);
-    cell.appendChild(_dcRoom);
-    cell.appendChild(_dcStatus);
-    container.appendChild(cell);
-  });
-}
 
 // ── Rooms table (dashboard) ────────────────────────────────────────────────
-function renderRoomsTable(rooms) {
-  const tbody = $('rooms-table-body');
-  if (!tbody) return;
-  setText('table-count', rooms.length);
-  tbody.textContent = '';
-  rooms.slice(0, 15).forEach(room => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
-    const color = isSoon ? '#f59e0b' : '#3fff8b';
-    const tr = document.createElement('tr');
-    tr.className = 'hover:bg-primary/5 transition-colors';
-    tr.innerHTML = `
-      <td class="px-3 sm:px-6 py-3"><span style="font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:700;color:#fff;letter-spacing:0.1em">${room.building}</span></td>
-      <td class="px-3 sm:px-6 py-3"><span style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:700;color:#fff">${room.room}</span></td>
-      <td class="px-3 sm:px-6 py-3 hidden sm:table-cell"><div style="display:flex;align-items:center;gap:6px"><span style="width:6px;height:6px;border-radius:50%;background:${color};box-shadow:0 0 5px ${color};display:inline-block"></span><span style="font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.1em">${isSoon?'CLOSING':'OPEN'}</span></div></td>
-      <td class="px-3 sm:px-6 py-3 hidden sm:table-cell"><span style="font-family:'Space Grotesk',sans-serif;font-size:10px;color:#adaaaa">${room.minutes_until_next===null?'End of day':'~'+room.minutes_until_next+'m'}</span></td>
-      <td class="px-3 sm:px-6 py-3"><span style="font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:700;color:${color}">${formatTime(room.minutes_until_next)}</span></td>`;
-    tbody.appendChild(tr);
-  });
-}
 
 // ── Dashboard building filter chips ───────────────────────────────────────
-function renderDashBuildingFilter(buildings) {
-  const container = $('dash-building-filter');
-  if (!container) return;
-  container.textContent = '';
-  buildings.slice(0, 8).forEach(b => {
-    const btn = document.createElement('button');
-    btn.style.cssText = `padding:3px 8px;font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;border:1px solid rgba(63,255,139,0.2);color:#adaaaa;border-radius:2px;cursor:pointer;text-transform:uppercase;letter-spacing:0.1em;background:transparent;transition:all 0.15s`;
-    btn.textContent = `${b.building}(${b.empty_rooms})`;
-    btn.addEventListener('mouseover', () => { btn.style.color='#3fff8b'; btn.style.borderColor='rgba(63,255,139,0.5)'; });
-    btn.addEventListener('mouseout',  () => { btn.style.color='#adaaaa'; btn.style.borderColor='rgba(63,255,139,0.2)'; });
-    btn.addEventListener('click', () => { state.building = b.building; fetchRooms(); switchView('rooms'); });
-    container.appendChild(btn);
-  });
-}
 
 // ── Room grid skeleton loader ──────────────────────────────────────────────
 function renderRoomsGridSkeleton() {
@@ -1310,7 +1383,11 @@ function makeTileLayers(map) {
   }).addTo(map);
 }
 
-function updateBuildingMarkers(map, markersObj, buildings) {
+// `interactive:false` is for the home hero, whose markers must not respond to
+// clicks: the hero is wrapped in a single button that opens the full Map, and
+// Leaflet does not stop native DOM propagation, so a clickable pin would open
+// the building panel AND bubble to the button, switching the view underneath.
+function updateBuildingMarkers(map, markersObj, buildings, { interactive = true } = {}) {
   Object.values(markersObj).forEach(({circle, label}) => {
     if (circle) map.removeLayer(circle);
     if (label)  map.removeLayer(label);
@@ -1323,7 +1400,8 @@ function updateBuildingMarkers(map, markersObj, buildings) {
     if (!coords) return;
     const color = occColor(b.occupancy_pct);
     const circle = L.circleMarker(coords, {
-      radius:18, fillColor:color, color:'#fff', weight:2, fillOpacity:0.65
+      radius:18, fillColor:color, color:'#fff', weight:2, fillOpacity:0.65,
+      interactive
     }).addTo(map);
     const label = L.marker(coords, {
       icon: L.divIcon({
@@ -1331,9 +1409,11 @@ function updateBuildingMarkers(map, markersObj, buildings) {
         className:'', iconSize:[70,32], iconAnchor:[35,16]
       }), interactive:false, zIndexOffset:1000
     }).addTo(map);
-    circle.on('click', () => openBuildingPanel(b));
-    circle.on('mouseover', function(){ this.setStyle({fillOpacity:0.85, radius:22}); });
-    circle.on('mouseout',  function(){ this.setStyle({fillOpacity:0.65, radius:18}); });
+    if (interactive) {
+      circle.on('click', () => openBuildingPanel(b));
+      circle.on('mouseover', function(){ this.setStyle({fillOpacity:0.85, radius:22}); });
+      circle.on('mouseout',  function(){ this.setStyle({fillOpacity:0.65, radius:18}); });
+    }
     markersObj[b.building] = {circle, label};
   });
 }
@@ -1350,19 +1430,46 @@ function initMap() {
   if (state.buildingsData.length) updateBuildingMarkers(state.map, state.markers, state.buildingsData);
 }
 
-function initDashMap() {
+// The home hero map. Deliberately inert: dragging and zoom are disabled so
+// it cannot capture the page's scroll on a touch device, and the whole hero
+// is a single tap target that opens the full Map view.
+function initHomeHeroMap() {
   if (state.dashMap) return;
-  const el = $('dash-map-container');
+  const el = $('home-hero-map');
   if (!el) return;
-  state.dashMap = L.map('dash-map-container', {
+  state.dashMap = L.map('home-hero-map', {
     center: [40.7424, -74.1779], zoom: 16,
-    zoomControl: true,
-    scrollWheelZoom: false,  // disabled so page can still scroll; activates on map click
+    zoomControl: false,
+    scrollWheelZoom: false,
+    dragging: false,
+    doubleClickZoom: false,
+    boxZoom: false,
+    keyboard: false,
+    touchZoom: false,
+    attributionControl: false,
   });
-  // Enable scroll wheel zoom when user clicks/interacts with the map
-  state.dashMap.on('click', () => state.dashMap.scrollWheelZoom.enable());
   makeTileLayers(state.dashMap);
-  if (state.buildingsData.length) updateBuildingMarkers(state.dashMap, state.dashMarkers, state.buildingsData);
+  if (state.buildingsData.length) {
+    updateBuildingMarkers(state.dashMap, state.dashMarkers, state.buildingsData, { interactive: false });
+  }
+}
+
+// Construct the hero map if needed (the guard inside initHomeHeroMap()
+// prevents double-construction), then always re-measure it. A re-measure is
+// needed on every call, not just the first: if a deep link lands on another
+// view first, #view-dashboard is display:none while initHomeHeroMap() runs,
+// so its container has zero size and any invalidateSize() at that point is a
+// no-op. Called from both switchView()'s dashboard branch and init() so the
+// two paths can't drift apart again.
+function showHomeHeroMap() {
+  initHomeHeroMap();
+  // A Leaflet map sized by the layout renders blank until it re-measures.
+  setTimeout(() => { if (state.dashMap) state.dashMap.invalidateSize(); }, 60);
+}
+
+function updateHomeHeroStat(buildings) {
+  const free = buildings.reduce((s, b) => s + b.empty_rooms, 0);
+  setText('home-hero-stat', free === 1 ? '1 room free' : `${free} rooms free`);
 }
 
 // ── Building panel ──────────────────────────────────────────────────────────
@@ -1381,8 +1488,6 @@ function openBuildingPanel(buildingData) {
 
   // CAB = library special case
   if (buildingData.building === 'CAB') {
-    const ft = $('floor-tabs'); if (ft) ft.innerHTML = '';
-    const fw = $('floor-tabs-wrap'); if (fw) fw.style.display = 'none';
     const sw = $('panel-search-wrap'); if (sw) sw.style.display = 'none';
     const hw = $('panel-heatmap-wrap'); if (hw) hw.style.display = 'none';
     const fc = $('floor-rooms');
@@ -1399,7 +1504,6 @@ function openBuildingPanel(buildingData) {
   }
 
   // Restore sections
-  const fw = $('floor-tabs-wrap'); if (fw) fw.style.display = '';
   const sw = $('panel-search-wrap'); if (sw) sw.style.display = '';
   const hw = $('panel-heatmap-wrap'); if (hw) hw.style.display = '';
   if ($('panel-search')) $('panel-search').value = '';
@@ -1408,16 +1512,15 @@ function openBuildingPanel(buildingData) {
   // Loading state
   const fc = $('floor-rooms');
   if (fc) fc.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:48px 16px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em">Loading…</div>`;
-  const ft = $('floor-tabs'); if (ft) ft.innerHTML = '';
 
-  fetch(`/api/rooms/all?building=${encodeURIComponent(buildingData.building)}`)
+  const params = filterParams();
+  params.set('building', buildingData.building);
+
+  fetch('/api/rooms/all?' + params.toString())
     .then(r => r.json())
     .then(rooms => {
       state.floorRoomsData = rooms;
-      const floors = [...new Set(rooms.map(r => r.floor))].sort((a,b) => a - b);
-      state.mapFloor = floors[0] ?? 1;
-      buildFloorTabs(floors, rooms);
-      renderRoomGrid(rooms, state.mapFloor);
+      renderRoomsByFloor(rooms);
     })
     .catch(() => {
       if (fc) fc.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:48px;color:#ff7166;font-size:11px">Error loading rooms.</div>`;
@@ -1463,78 +1566,88 @@ function renderHeatmap(building) {
     .catch(() => { wrap.innerHTML = ''; });
 }
 
-function buildFloorTabs(floors, rooms) {
-  const container = $('floor-tabs');
-  if (!container) return;
-  container.innerHTML = '';
-  floors.forEach(f => {
-    const freeCount = rooms.filter(r => r.floor === f && r.empty).length;
-    const isActive  = f === state.mapFloor;
-    const label     = f === 0 ? 'GRD' : `FL ${f}`;
-    const btn = document.createElement('button');
-    btn.dataset.floor = f;
-    btn.innerHTML = `<span style="display:block">${label}</span><span style="display:block;font-size:8px;opacity:0.65;margin-top:1px">${freeCount} free</span>`;
-    btn.style.cssText = `padding:6px 11px;font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:700;border-radius:2px;text-transform:uppercase;letter-spacing:0.08em;cursor:pointer;transition:all 0.15s;text-align:center;line-height:1.2;border:1px solid ${isActive ? '#3fff8b' : 'rgba(72,72,71,0.4)'};background:${isActive ? 'rgba(63,255,139,0.12)' : 'transparent'};color:${isActive ? '#3fff8b' : '#adaaaa'}`;
-    btn.addEventListener('click', () => {
-      state.mapFloor = f;
-      if ($('panel-search')) $('panel-search').value = '';
-      document.querySelectorAll('#floor-tabs button').forEach(b => {
-        b.style.border = '1px solid rgba(72,72,71,0.4)';
-        b.style.background = 'transparent';
-        b.style.color = '#adaaaa';
-      });
-      btn.style.border = '1px solid #3fff8b';
-      btn.style.background = 'rgba(63,255,139,0.12)';
-      btn.style.color = '#3fff8b';
-      renderRoomGrid(state.floorRoomsData, f);
-    });
-    container.appendChild(btn);
-  });
-}
-
-function filterFloorRooms(query) {
-  renderRoomGrid(state.floorRoomsData, state.mapFloor, query);
-}
-
-function renderRoomGrid(rooms, floor, query = '') {
-  let list = rooms
-    .filter(r => r.floor === floor)
-    .sort((a, b) => a.room.localeCompare(b.room, undefined, {numeric: true}));
-  if (query) list = list.filter(r => r.room.toLowerCase().includes(query.toLowerCase()));
-
+// Rooms grouped by floor. In-use rooms stay visible but dimmed — hiding them
+// leaves a suspiciously short list with no sense of the building's size.
+function renderRoomsByFloor(rooms) {
   const container = $('floor-rooms');
   if (!container) return;
-  container.innerHTML = '';
+  container.textContent = '';
 
-  const freeCount = list.filter(r => r.empty).length;
-  setText('floor-room-count', query ? `${list.length} match${list.length !== 1 ? 'es' : ''}` : `${freeCount} / ${list.length} free`);
-
-  if (!list.length) {
-    container.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:48px 16px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em">${query ? 'No rooms match.' : 'No rooms on this floor.'}</div>`;
-    return;
-  }
-
+  const floors = [...new Set(rooms.map(r => r.floor))].sort((a, b) => a - b);
   const frag = document.createDocumentFragment();
-  list.forEach(room => {
-    const isSoon = room.empty && room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
-    const color  = !room.empty ? '#ff7166' : isSoon ? '#f59e0b' : '#3fff8b';
-    const status = !room.empty ? 'In Use'
-                 : room.minutes_until_next === null ? 'Free all day'
-                 : `${room.minutes_until_next}m free`;
-    const cell = document.createElement('div');
-    cell.className = 'interactive';
-    cell.style.cssText = `background:${color}0d;border:1px solid ${color}30;border-top:2px solid ${color};padding:10px 9px 9px;border-radius:2px;transition:all 0.15s;cursor:pointer;min-height:44px`;
-    cell.title = `${room.room} · tap for schedule`;
-    makeActivatable(cell, `Room ${room.room}, ${status}. Open schedule.`,
-                    () => openRoomDetail(room.building, room.room));
-    cell.onmouseover = () => { cell.style.background = `${color}1a`; cell.style.transform = 'translateY(-1px)'; };
-    cell.onmouseout  = () => { cell.style.background = `${color}0d`; cell.style.transform = ''; };
-    cell.innerHTML = `
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:800;color:#fff;letter-spacing:0.03em;line-height:1;margin-bottom:5px">${room.room}</div>
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:600;color:${color};text-transform:uppercase;letter-spacing:0.08em">${status}</div>`;
-    frag.appendChild(cell);
+
+  floors.forEach(floor => {
+    const onFloor = rooms.filter(r => r.floor === floor);
+    const freeCount = onFloor.filter(r => r.empty !== false).length;
+
+    const head = document.createElement('div');
+    head.dataset.floorHead = floor;
+    head.style.cssText = 'grid-column:1/-1;display:flex;align-items:center;gap:10px;margin-top:8px';
+    head.appendChild(groupLabel(floor === 0 ? 'Ground floor' : `Floor ${floor}`));
+    const rule = document.createElement('span');
+    rule.style.cssText = 'flex:1;height:1px;background:var(--hairline-soft)';
+    head.appendChild(rule);
+    const cnt = document.createElement('span');
+    cnt.className = 'label';
+    cnt.style.cssText = 'color:var(--free)';
+    cnt.textContent = `${freeCount} free`;
+    head.appendChild(cnt);
+    frag.appendChild(head);
+
+    onFloor.forEach(room => {
+      const st = roomStatus(room);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.dataset.room = room.room;
+      btn.dataset.floor = floor;
+      btn.setAttribute('aria-label',
+        `Room ${room.room}, ${st.text}. Open schedule.`);
+      const tone = st.kind === 'busy'
+        ? 'opacity:0.5;border-color:var(--hairline-soft);background:var(--surface)'
+        : st.kind === 'soon'
+          ? 'border-color:rgba(245,158,11,0.32);background:rgba(245,158,11,0.06)'
+          : 'border-color:rgba(63,255,139,0.3);background:rgba(63,255,139,0.06)';
+      btn.style.cssText = 'display:flex;flex-direction:column;justify-content:center;gap:3px;' +
+        'min-height:54px;padding:9px 10px;border-radius:6px;border:1px solid;cursor:pointer;' +
+        'text-align:left;' + tone;
+      btn.addEventListener('click', () => openRoomDetail(room.building, room.room));
+
+      const num = document.createElement('div');
+      num.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:700;" +
+        'font-variant-numeric:tabular-nums;line-height:1;color:var(--text)';
+      num.textContent = room.room;
+      btn.appendChild(num);
+      btn.appendChild(statusPill(room));
+      frag.appendChild(btn);
+    });
   });
+
   container.appendChild(frag);
+}
+
+// Whole-building room search. Filters room buttons across every floor
+// section and hides any floor header whose rooms are all filtered out —
+// otherwise the user is left staring at an empty "Floor 2 — 4 free" header.
+// The free counts themselves always describe the full floor, not the
+// filtered subset, so they never appear to change while typing.
+function filterFloorRooms(query) {
+  const container = $('floor-rooms');
+  if (!container) return;
+  const q = query.trim().toLowerCase();
+
+  const floorsWithVisibleRoom = new Set();
+  container.querySelectorAll('button[data-room]').forEach(btn => {
+    const match = !q || btn.dataset.room.toLowerCase().includes(q);
+    // Restore 'flex' explicitly: these buttons carry an inline display:flex
+    // from renderRoomsByFloor, and setting display='' REMOVES that declaration
+    // rather than restoring it, which would blockify every matching tile.
+    btn.style.display = match ? 'flex' : 'none';
+    if (match) floorsWithVisibleRoom.add(btn.dataset.floor);
+  });
+
+  container.querySelectorAll('[data-floor-head]').forEach(head => {
+    head.style.display = floorsWithVisibleRoom.has(head.dataset.floorHead) ? 'flex' : 'none';
+  });
 }
 
 // ── Settings ───────────────────────────────────────────────────────────────
@@ -1667,6 +1780,32 @@ function minToTime(min) {
 }
 
 // ── Room Detail Sheet ────────────────────────────────────────────────────────
+// The pin control on the detail sheet is the only way to pin a room from the
+// Home -> building -> room path; the room-grid cards are the other entry point.
+function renderDetailPin() {
+  const btn = $('rds-pin');
+  const icon = $('rds-pin-icon');
+  if (!btn || !icon || !state.detailRoom) return;
+  const [b, r] = splitDetailRoom(state.detailRoom);
+  const on = isPinned(b, r);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.title = on ? 'Unpin this room' : 'Pin this room';
+  icon.textContent = on ? 'star' : 'star_outline';
+  icon.style.color = on ? 'var(--free)' : '';
+}
+
+function splitDetailRoom(key) {
+  const i = key.indexOf('-');
+  return [key.slice(0, i), key.slice(i + 1)];
+}
+
+function toggleDetailPin() {
+  if (!state.detailRoom) return;
+  const [b, r] = splitDetailRoom(state.detailRoom);
+  togglePin(b, r);
+  renderDetailPin();
+}
+
 function openRoomDetail(building, room) {
   const sheet    = $('room-detail-sheet');
   const backdrop = $('room-detail-backdrop');
@@ -1674,6 +1813,7 @@ function openRoomDetail(building, room) {
 
   state.detailRoom = `${building}-${room}`;
   syncURL();
+  renderDetailPin();
 
   setText('rds-building', `${building} · Room Detail`);
   setText('rds-room', room);
@@ -1861,6 +2001,15 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+// Distance to a building. Unlike "closest room", this is exact for the home
+// grid: the grid IS building-level, so the label is literally true here.
+function buildingDistanceMeters(code) {
+  if (!state.userPos) return null;
+  const c = BUILDING_COORDS[code];
+  if (!c) return null;
+  return haversineMeters(state.userPos.lat, state.userPos.lon, c[0], c[1]);
+}
+
 function roomDistanceMeters(room) {
   if (!state.userPos) return null;
   const c = BUILDING_COORDS[room.building];
@@ -1886,16 +2035,54 @@ function setGeoStatus(msg, color) {
   el.classList.remove('hidden');
 }
 
+// How trustworthy is a distance ranking at this GPS accuracy?
+// Calibrated against the real campus, not taste: NJIT's 18 buildings span
+// 465 m, with a median gap of 177 m between them. 50 m is under a third of
+// that median, so ordering holds. Past 150 m the error approaches the whole
+// campus and the ranking would be noise dressed up as an answer.
+function locationQuality(accuracyMeters) {
+  const a = Number(accuracyMeters);
+  if (!Number.isFinite(a) || a <= 0) {
+    return { tier: 'unusable', message: "Your device didn't report how accurate its location is, so rooms aren't ranked by distance." };
+  }
+  if (a <= 50) return { tier: 'good', message: '' };
+  if (a <= 150) {
+    return { tier: 'coarse', message: `Location accurate to ±${Math.round(a)} m — nearby buildings may be out of order.` };
+  }
+  return { tier: 'unusable', message: `Location only accurate to ±${Math.round(a)} m, which is too coarse to rank by distance on this campus.` };
+}
+
+// A cached fix goes stale as the user walks. Campus is 465 m end to end, and
+// at ~1.35 m/s a two-minute-old position can already be ~160 m wrong — about
+// the median gap between buildings, i.e. enough to invert the ranking.
+const POSITION_MAX_AGE_MS = 120000;
+
+function isPositionStale(pos, nowMs) {
+  if (!pos || !Number.isFinite(pos.at)) return true;
+  return (nowMs - pos.at) > POSITION_MAX_AGE_MS;
+}
+
 function requestLocation() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error('unsupported'));
     navigator.geolocation.getCurrentPosition(
       pos => {
-        state.userPos = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        state.userPos = {
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude,
+          // Kept so callers can judge whether a ranking is honest. Previously
+          // discarded, which made a +/-8 m fix and a +/-90 m fix look identical.
+          accuracy: pos.coords.accuracy,
+          // Captured so a fix cached earlier in the session cannot be reused
+          // indefinitely after the user has walked somewhere else.
+          at: Date.now(),
+        };
         resolve(state.userPos);
       },
       err => reject(err),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+      // 60s of cached position is ~80 m of walking on a 465 m campus — enough
+      // to silently corrupt the ranking the user just asked for.
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 }
     );
   });
 }
@@ -1911,7 +2098,7 @@ function _updateSortButtons() {
 
 async function setFindRoomSort(mode) {
   if (mode === 'distance') {
-    if (!state.userPos) {
+    if (!state.userPos || isPositionStale(state.userPos, Date.now())) {
       setGeoStatus('Getting your location…', '#767575');
       try {
         await requestLocation();
@@ -1927,9 +2114,22 @@ async function setFindRoomSort(mode) {
         return;
       }
     }
+    // A fix too coarse to separate buildings must not be dressed up as a
+    // ranking — fall back rather than present noise as an answer.
+    const q = locationQuality(state.userPos.accuracy);
+    if (q.tier === 'unusable') {
+      setGeoStatus(q.message + ' Sorting by free time instead.', 'var(--soon)');
+      state.frSort = 'time';
+      _updateSortButtons();
+      renderFindRoom(state.frLastRooms);
+      return;
+    }
+
     // Off campus, distance ranking is meaningless.
     const far = haversineMeters(state.userPos.lat, state.userPos.lon, 40.7424, -74.1779) > 3000;
     if (far) setGeoStatus("You look far from campus — distances are from NJIT's Newark campus.", '#f59e0b');
+    else if (q.tier === 'coarse') setGeoStatus(q.message, 'var(--soon)');
+    else setGeoStatus('');
   }
   state.frSort = mode;
   _updateSortButtons();
@@ -2063,7 +2263,10 @@ function renderFindRoom(rooms) {
     row.onmouseout  = () => { row.style.background = 'rgba(63,255,139,0.03)'; };
     makeActivatable(row, `${buildingName(room.building)} room ${room.room}, ${formatTime(room.minutes_until_next)} free. Open schedule.`,
                     () => { closeFindRoom(); openRoomDetail(room.building, room.room); });
-    const dist = roomDistanceMeters(room);
+    // Same gate as the buildings grid: a fix too coarse to rank with is too
+    // coarse to print "304 m - 4 min walk" from.
+    const usable = state.userPos && locationQuality(state.userPos.accuracy).tier !== 'unusable';
+    const dist = usable ? roomDistanceMeters(room) : null;
     const distLabel = dist !== null
       ? `<div style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:#6e9bff;margin-top:3px">${formatDistance(dist)}</div>`
       : '';
@@ -2205,7 +2408,7 @@ async function init() {
   await refresh();
   nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
   updateCountdown();
-  initDashMap(); // init dashboard map after data is loaded
+  showHomeHeroMap(); // hero map needs data loaded for its markers; re-measures even if view was hidden
   fetchSemesterLabel();
   setInterval(scheduledRefresh, REFRESH_INTERVAL_MS);
 
