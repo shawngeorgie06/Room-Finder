@@ -1,0 +1,159 @@
+"""Characterisation tests for the room status/colour logic, executed in node.
+
+Four separate implementations of "is this room free, closing soon, or in use"
+grew up in app.js: roomStatus() (token-based), roomStatusMeta() (hex-based),
+and three inline `isSoon` blocks in the render functions. They agree today by
+coincidence of copy-paste, not by construction.
+
+These tests pin down what each one returns BEFORE consolidating them, so the
+refactor has to prove it changed nothing. They deliberately assert literal
+expected values rather than comparing the implementations to each other — two
+implementations that drift together would still pass a comparison test.
+
+The two known-and-intended differences are captured explicitly: roomStatus()
+says "In use" where roomStatusMeta() says "IN USE", and roomStatus() returns
+CSS custom properties where roomStatusMeta() returns raw hex. Call sites
+depend on both forms, so consolidation must preserve them.
+"""
+import json
+import os
+import shutil
+import subprocess
+
+import pytest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+APP_JS = os.path.join(ROOT, 'static', 'app.js')
+
+pytestmark = pytest.mark.skipif(shutil.which('node') is None,
+                                reason='node is required to exercise the JS')
+
+# The inputs that matter: busy regardless of minutes, the exact soon/free
+# boundary on both sides, zero, null and undefined minutes, and hour-crossing
+# values that exercise formatTime's branches.
+CASES = [
+    {'empty': False, 'minutes_until_next': 10},
+    {'empty': False, 'minutes_until_next': None},
+    {'empty': True, 'minutes_until_next': None},
+    {'empty': True, 'minutes_until_next': 0},
+    {'empty': True, 'minutes_until_next': 29},
+    {'empty': True, 'minutes_until_next': 30},
+    {'empty': True, 'minutes_until_next': 31},
+    {'empty': True, 'minutes_until_next': 60},
+    {'empty': True, 'minutes_until_next': 95},
+    {'minutes_until_next': 5},
+]
+
+
+def _extract(fn_name):
+    """Pull one top-level function's source out of app.js by brace matching."""
+    src = open(APP_JS, encoding='utf-8').read()
+    start = src.index(f'function {fn_name}(')
+    depth = 0
+    for j in range(src.index('{', start), len(src)):
+        if src[j] == '{':
+            depth += 1
+        elif src[j] == '}':
+            depth -= 1
+            if depth == 0:
+                return src[start:j + 1]
+    raise AssertionError(f'unbalanced braces extracting {fn_name}')
+
+
+def _run(expr, threshold=30):
+    """Evaluate `expr` against every case with state.soonThresholdMins set."""
+    script = '\n'.join([
+        _extract('formatTime'),
+        _extract('roomStatus'),
+        _extract('roomStatusMeta'),
+        f'const state = {{ soonThresholdMins: {threshold} }};',
+        f'const cases = {json.dumps(CASES)};',
+        f'console.log(JSON.stringify(cases.map(room => ({expr}))));',
+    ])
+    out = subprocess.run(['node', '-e', script], capture_output=True, text=True,
+                         timeout=20)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_room_status_kinds():
+    assert _run('roomStatus(room).kind') == [
+        'busy', 'busy', 'free', 'soon', 'soon', 'soon', 'free', 'free', 'free',
+        'soon',
+    ]
+
+
+def test_room_status_text():
+    assert _run('roomStatus(room).text') == [
+        'In use', 'In use', 'FREE ALL DAY', '~0M', '~29M', '~30M', '~31M',
+        '1H', '1H 35M', '~5M',
+    ]
+
+
+def test_room_status_css_vars():
+    assert _run('roomStatus(room).cssVar') == [
+        'var(--busy)', 'var(--busy)', 'var(--free)', 'var(--soon)',
+        'var(--soon)', 'var(--soon)', 'var(--free)', 'var(--free)',
+        'var(--free)', 'var(--soon)',
+    ]
+
+
+def test_room_status_meta_text_is_uppercase_for_busy():
+    """roomStatusMeta says IN USE where roomStatus says In use.
+
+    This is not a bug to fix during consolidation — the search-result call
+    site renders uppercase. Consolidation must keep this difference.
+    """
+    assert _run('roomStatusMeta(room).text') == [
+        'IN USE', 'IN USE', 'FREE ALL DAY', '~0M', '~29M', '~30M', '~31M',
+        '1H', '1H 35M', '~5M',
+    ]
+
+
+def test_room_status_meta_colors_are_raw_hex():
+    """Call sites build inline style strings, which cannot use var() reliably
+    inside every context, so this form returns literal hex."""
+    assert _run('roomStatusMeta(room).color') == [
+        '#ff7166', '#ff7166', '#3fff8b', '#f59e0b', '#f59e0b', '#f59e0b',
+        '#3fff8b', '#3fff8b', '#3fff8b', '#f59e0b',
+    ]
+
+
+def test_threshold_is_honoured_by_both_implementations():
+    """The soon window is user-configurable, so the boundary must move with it.
+
+    At a 60-minute threshold the 31- and 60-minute rooms become 'soon' while
+    the 95-minute room stays free. A consolidation that hardcoded 30 would
+    pass every other test in this file and fail here.
+    """
+    assert _run('roomStatus(room).kind', threshold=60) == [
+        'busy', 'busy', 'free', 'soon', 'soon', 'soon', 'soon', 'soon', 'free',
+        'soon',
+    ]
+    assert _run('roomStatusMeta(room).color', threshold=60) == [
+        '#ff7166', '#ff7166', '#3fff8b', '#f59e0b', '#f59e0b', '#f59e0b',
+        '#f59e0b', '#f59e0b', '#3fff8b', '#f59e0b',
+    ]
+
+
+def test_undefined_minutes_is_treated_as_free_all_day_not_soon():
+    """`undefined <= 30` is false, so undefined already lands on free.
+
+    roomStatus() guards undefined explicitly; roomStatusMeta() only guards
+    null and relies on the comparison. Both reach 'free', and a consolidation
+    that swapped the guard for a truthiness check would break the 0-minute
+    case above instead. Pinned here so the equivalence is deliberate.
+    """
+    script = '\n'.join([
+        _extract('formatTime'),
+        _extract('roomStatus'),
+        _extract('roomStatusMeta'),
+        'const state = { soonThresholdMins: 30 };',
+        'const r = { empty: true };',
+        'console.log(JSON.stringify('
+        '[roomStatus(r).kind, roomStatusMeta(r).color, roomStatus(r).text]));',
+    ])
+    out = subprocess.run(['node', '-e', script], capture_output=True, text=True,
+                         timeout=20)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == ['free', '#3fff8b', 'FREE ALL DAY']
