@@ -58,6 +58,7 @@ const state = {
   freeAllDay: false, // show only rooms free for rest of day
   soonThresholdMins: 30,  // configurable "busy soon" threshold in minutes
   hideFullBuildings: true,  // hide buildings with nothing free (home grid)
+  buildingSort: 'free',     // home grid ranking: 'free' | 'distance'
   map: null,       // full-screen map view instance
   dashMap: null,   // dashboard embedded map instance
   markers: {},
@@ -314,7 +315,20 @@ function renderBuildingsGrid(buildings) {
     ? buildings.filter(b => b.empty_rooms > 0)
     : buildings.slice();
 
-  visible.sort((a, b) => b.empty_rooms - a.empty_rooms);
+  if (state.buildingSort === 'distance' && state.userPos) {
+    // Buildings we have no coordinates for sink to the bottom rather than
+    // sorting as if they were underfoot.
+    visible.sort((a, b) => {
+      const da = buildingDistanceMeters(a.building);
+      const db = buildingDistanceMeters(b.building);
+      if (da === null && db === null) return b.empty_rooms - a.empty_rooms;
+      if (da === null) return 1;
+      if (db === null) return -1;
+      return da - db;
+    });
+  } else {
+    visible.sort((a, b) => b.empty_rooms - a.empty_rooms);
+  }
 
   if (!visible.length) {
     const empty = document.createElement('div');
@@ -336,10 +350,22 @@ function renderBuildingsGrid(buildings) {
     card.addEventListener('click', () => openBuildingPanel(b));
 
     const freePct = b.total_rooms ? Math.round(b.empty_rooms / b.total_rooms * 100) : 0;
+    // Show the distance when we have one — a list sorted by a key the reader
+    // cannot see is hard to trust. But suppress it when the fix is too coarse
+    // to rank with: printing "304 m" off a +/-400 m fix claims a precision we
+    // just told the user we do not have.
+    const usable = state.userPos && locationQuality(state.userPos.accuracy).tier !== 'unusable';
+    const dist = usable ? buildingDistanceMeters(b.building) : null;
+    const distLabel = dist === null ? '' :
+      (dist >= 1000 ? `${(dist / 1000).toFixed(1)} km` : `${Math.round(dist)} m`);
+    if (distLabel) {
+      card.setAttribute('aria-label',
+        `${buildingName(b.building)}, ${b.empty_rooms} of ${b.total_rooms} rooms free, ${distLabel} away`);
+    }
     card.innerHTML = `
       <div style="width:52px;flex:none;font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:700;color:var(--text)">${esc(b.building)}</div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(buildingName(b.building))}</div>
+        <div style="font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(buildingName(b.building))}${distLabel ? ` &middot; ${distLabel}` : ''}</div>
         <div style="height:4px;border-radius:9999px;background:rgba(255,255,255,0.07);margin-top:7px;overflow:hidden">
           <div style="height:100%;width:${freePct}%;border-radius:9999px;background:var(--free)"></div>
         </div>
@@ -393,12 +419,73 @@ function renderBuildingsControls(buildings) {
   btn.appendChild(track);
   container.appendChild(btn);
 
+  const distanceOn = state.buildingSort === 'distance';
+  const sortBtn = document.createElement('button');
+  sortBtn.type = 'button';
+  sortBtn.id = 'buildings-sort';
+  sortBtn.className = 'label';
+  sortBtn.setAttribute('aria-pressed', distanceOn ? 'true' : 'false');
+  sortBtn.style.cssText = 'display:flex;align-items:center;gap:7px;min-height:44px;padding:8px 14px;' +
+    'border-radius:9999px;cursor:pointer;' +
+    (distanceOn ? 'color:var(--free);background:rgba(63,255,139,0.09);border:1px solid rgba(63,255,139,0.28)'
+                : 'color:var(--muted);background:transparent;border:1px solid var(--hairline-soft)');
+  sortBtn.textContent = distanceOn ? 'Nearest' : 'Most free';
+  sortBtn.addEventListener('click', () => setBuildingSort(distanceOn ? 'free' : 'distance'));
+  container.appendChild(sortBtn);
+
   const count = document.createElement('span');
   count.className = 'label';
   count.style.cssText = 'color:var(--faint);white-space:nowrap';
   const shown = on ? buildings.filter(b => b.empty_rooms > 0).length : buildings.length;
   count.textContent = `${shown} shown`;
   container.appendChild(count);
+}
+
+function setBuildingsGeoStatus(msg, color) {
+  const el = $('buildings-geo-status');
+  if (!el) return;
+  if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
+  el.textContent = msg;
+  el.style.color = color || 'var(--faint)';
+  el.classList.remove('hidden');
+}
+
+// Ranking the home grid by distance. Shares state.userPos with Find Me a Room,
+// so granting permission on either surface benefits the other.
+async function setBuildingSort(mode) {
+  if (mode === 'distance') {
+    if (!state.userPos) {
+      setBuildingsGeoStatus('Getting your location…');
+      try {
+        await requestLocation();
+      } catch (err) {
+        setBuildingsGeoStatus(
+          err && err.code === 1
+            ? 'Location permission denied — sorted by most free instead.'
+            : 'Could not get your location — sorted by most free instead.',
+          'var(--soon)');
+        state.buildingSort = 'free';
+        renderBuildingsControls(state.buildingsData);
+        renderBuildingsGrid(state.buildingsData);
+        return;
+      }
+    }
+    const q = locationQuality(state.userPos.accuracy);
+    if (q.tier === 'unusable') {
+      setBuildingsGeoStatus(q.message + ' Sorted by most free instead.', 'var(--soon)');
+      state.buildingSort = 'free';
+      renderBuildingsControls(state.buildingsData);
+      renderBuildingsGrid(state.buildingsData);
+      return;
+    }
+    setBuildingsGeoStatus(q.tier === 'coarse' ? q.message : '', 'var(--soon)');
+  } else {
+    setBuildingsGeoStatus('');
+  }
+  state.buildingSort = mode;
+  renderBuildingsControls(state.buildingsData);
+  renderBuildingsGrid(state.buildingsData);
+  announce(mode === 'distance' ? 'Buildings sorted by distance.' : 'Buildings sorted by most free.');
 }
 
 // ── Fetch data ─────────────────────────────────────────────────────────────
@@ -1912,6 +1999,15 @@ function haversineMeters(lat1, lon1, lat2, lon2) {
   const a = Math.sin(dLat / 2) ** 2 +
             Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// Distance to a building. Unlike "closest room", this is exact for the home
+// grid: the grid IS building-level, so the label is literally true here.
+function buildingDistanceMeters(code) {
+  if (!state.userPos) return null;
+  const c = BUILDING_COORDS[code];
+  if (!c) return null;
+  return haversineMeters(state.userPos.lat, state.userPos.lon, c[0], c[1]);
 }
 
 function roomDistanceMeters(room) {
