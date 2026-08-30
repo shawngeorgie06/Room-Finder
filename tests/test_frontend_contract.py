@@ -47,3 +47,23 @@ def test_contract_test_sees_a_realistic_number_of_ids():
     empty set."""
     assert len(referenced_element_ids()) > 40
     assert len(declared_element_ids()) > 80
+
+
+def test_component_helpers_exist_and_use_tokens():
+    """The helpers must read colours from CSS custom properties, not hex.
+
+    Hardcoded hex in JS-generated markup is why the palette drifted to 126
+    hand-typed values in the first place.
+    """
+    js = open(APP_JS, encoding='utf-8').read()
+    for fn in ('function roomStatus', 'function statusPill', 'function groupLabel'):
+        assert fn in js, f"missing helper: {fn}"
+
+    start = js.index('function roomStatus')
+    end = js.index('// ── Global search')
+    helpers = js[start:end]
+    assert 'var(--free)' in helpers
+    assert 'var(--soon)' in helpers
+    assert 'var(--busy)' in helpers
+    assert not re.search(r'#[0-9a-fA-F]{6}', helpers), \
+        "component helpers must use var(--token), not hardcoded hex"

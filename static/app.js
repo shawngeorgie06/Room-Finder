@@ -210,6 +210,42 @@ function occColor(pct) {
   return '#3fff8b';
 }
 
+// ── Component helpers ──────────────────────────────────────────────────────
+// app.js builds most of its UI as inline style strings. These read colour
+// from the :root custom properties in index.html so the palette lives in one
+// place rather than being retyped at every call site.
+
+function roomStatus(room) {
+  if (room.empty === false) {
+    return { kind: 'busy', text: 'In use', cssVar: 'var(--busy)' };
+  }
+  const mins = room.minutes_until_next;
+  if (mins !== null && mins !== undefined && mins <= state.soonThresholdMins) {
+    return { kind: 'soon', text: formatTime(mins), cssVar: 'var(--soon)' };
+  }
+  return { kind: 'free', text: formatTime(mins), cssVar: 'var(--free)' };
+}
+
+function statusPill(room) {
+  const st = roomStatus(room);
+  const el = document.createElement('span');
+  el.className = 'label';
+  el.style.cssText = `color:${st.cssVar};white-space:nowrap;flex-shrink:0`;
+  el.textContent = st.text;
+  return el;
+}
+
+function groupLabel(text) {
+  const el = document.createElement('div');
+  el.className = 'label';
+  el.setAttribute('role', 'presentation');
+  el.style.cssText = 'color:var(--faint);padding:10px 2px 6px';
+  el.textContent = text;
+  return el;
+}
+
+// ── Global search (grouped as-you-type autocomplete) ───────────────────────
+
 // ── Clock ──────────────────────────────────────────────────────────────────
 function updateClock() {
   const t = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
@@ -409,7 +445,6 @@ function applyThreshold() {
   syncURL();
 }
 
-// ── Global search (grouped as-you-type autocomplete) ───────────────────────
 const SEARCH_STOPWORDS = new Set(['floor', 'fl', 'the', 'room', 'rooms', 'building', 'bldg', 'hall', 'at']);
 const FLOOR_ALIASES = {
   ground: 0, grd: 0, gnd: 0, basement: 0, bsmt: 0,
