@@ -348,84 +348,13 @@
       </div>
 
       <!-- Dashboard Grid -->
-      <div class="grid grid-cols-12 gap-6">
-
-        <!-- LIVE ROOM FEED -->
-        <div class="col-span-12 xl:col-span-3 glass-card border border-primary/10 flex flex-col rounded-sm">
-          <div class="p-5 border-b border-primary/10 flex items-center justify-between">
-            <div class="flex items-center gap-2">
-              <span class="w-1.5 h-1.5 bg-primary animate-pulse rounded-full"></span>
-              <h3 class="text-xs font-label uppercase tracking-widest text-on-surface">Live Room Feed</h3>
-            </div>
-            <span class="text-label font-label text-primary">Streaming live</span>
-          </div>
-          <div id="live-feed" class="flex-1 overflow-y-auto max-h-[420px] p-4 space-y-4"></div>
-          <div class="p-4 border-t border-primary/10">
-            <button onclick="switchView('rooms')" class="w-full py-2 bg-primary/5 text-primary text-label font-bold uppercase tracking-widest border border-primary/10 hover:bg-primary/20 transition-all">
-              View All Rooms
-            </button>
-          </div>
+      <div>
+        <div class="flex items-center justify-between gap-3 mb-4">
+          <h2 class="text-title text-white">Buildings</h2>
+          <div id="buildings-controls" class="flex items-center gap-2"></div>
         </div>
-
-        <!-- BEST ROOMS RIGHT NOW -->
-        <div class="flex col-span-12 lg:col-span-5 glass-card border border-primary/10 p-6 rounded-sm flex-col">
-          <div class="flex items-center justify-between mb-5">
-            <div class="flex items-center gap-3">
-              <span class="material-symbols-outlined text-primary text-xl">star</span>
-              <h3 class="text-xs font-label uppercase tracking-[0.2em] text-on-surface">Best Rooms Right Now</h3>
-            </div>
-            <button onclick="switchView('rooms')" class="text-label font-bold text-primary tracking-widest uppercase hover:opacity-70 transition-all">View All →</button>
-          </div>
-          <div id="dash-best-rooms" class="flex-1 space-y-2 overflow-y-auto"></div>
-        </div>
-
-        <!-- EMPTY ROOMS TABLE -->
-        <div class="col-span-12 lg:col-span-7 glass-card border border-white/5 p-6 rounded-sm relative group">
-          <div class="flex flex-col gap-3 mb-6">
-            <div class="flex items-center gap-3">
-              <span class="material-symbols-outlined text-primary text-xl">meeting_room</span>
-              <h3 class="text-xs font-label uppercase tracking-[0.2em] text-on-surface">Currently Available Rooms</h3>
-            </div>
-            <p class="text-label text-on-surface-variant tracking-widest">Rooms free right now.</p>
-            <div id="dash-building-filter" class="flex flex-wrap gap-1.5"></div>
-          </div>
-          <div id="dash-rooms" class="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-[200px] overflow-y-auto"></div>
-        </div>
-
-        <!-- AVAILABLE ROOMS TABLE (full width) -->
-        <div class="hidden lg:block col-span-12 glass-card border border-white/5 rounded-sm overflow-hidden">
-          <div class="p-4 sm:p-6 border-b border-primary/10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-surface-container/20">
-            <div class="flex items-center gap-3">
-              <span class="material-symbols-outlined text-primary">table_rows</span>
-              <h3 class="text-xs font-label uppercase tracking-[0.2em] text-on-surface">Available Room Directory</h3>
-            </div>
-            <div class="flex items-center gap-3">
-              <span class="text-label text-on-surface-variant font-label tracking-widest uppercase">
-                <span id="table-count" class="text-primary">--</span> rooms free
-              </span>
-              <button onclick="switchView('rooms')" class="flex items-center gap-2 px-3 py-1.5 bg-primary text-on-primary font-bold text-xs rounded-sm hover:brightness-110 transition-all whitespace-nowrap">
-                <span class="material-symbols-outlined text-sm">open_in_full</span> Full View
-              </button>
-            </div>
-          </div>
-          <div class="overflow-x-auto">
-            <table class="w-full text-left">
-              <thead>
-                <tr class="bg-black/40 text-on-surface-variant text-label font-label uppercase tracking-widest border-b border-primary/5">
-                  <th class="px-3 sm:px-6 py-3 font-bold">Building</th>
-                  <th class="px-3 sm:px-6 py-3 font-bold">Room</th>
-                  <th class="px-3 sm:px-6 py-3 font-bold hidden sm:table-cell">Status</th>
-                  <th class="px-3 sm:px-6 py-3 font-bold hidden sm:table-cell">Free Until</th>
-                  <th class="px-3 sm:px-6 py-3 font-bold">Time Left</th>
-                </tr>
-              </thead>
-              <tbody id="rooms-table-body" class="divide-y divide-primary/5 text-sm"></tbody>
-            </table>
-          </div>
-          <div class="p-4 bg-black/60 border-t border-primary/5 flex justify-center">
-            <button onclick="switchView('rooms')" class="text-label font-bold text-primary tracking-[0.4em] uppercase hover:tracking-[0.6em] transition-all">Expand Full Directory</button>
-          </div>
-        </div>
+        <div id="buildings-grid" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2"></div>
+      </div>
 
       </div>
     </div>
