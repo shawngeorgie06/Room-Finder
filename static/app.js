@@ -214,6 +214,15 @@ function occColor(pct) {
   return '#3fff8b';
 }
 
+// The one definition of "closing soon". Four copies of this comparison used
+// to live in app.js; they agreed by copy-paste, which is not the same as
+// agreeing by construction. undefined is guarded explicitly because it
+// otherwise reaches `undefined <= n`, which is false for the wrong reason.
+function isClosingSoon(room) {
+  const mins = room.minutes_until_next;
+  return mins !== null && mins !== undefined && mins <= state.soonThresholdMins;
+}
+
 // ── Component helpers ──────────────────────────────────────────────────────
 // app.js builds most of its UI as inline style strings. These read colour
 // from the :root custom properties in index.html so the palette lives in one
@@ -224,7 +233,7 @@ function roomStatus(room) {
     return { kind: 'busy', text: 'In use', cssVar: 'var(--busy)' };
   }
   const mins = room.minutes_until_next;
-  if (mins !== null && mins !== undefined && mins <= state.soonThresholdMins) {
+  if (isClosingSoon(room)) {
     return { kind: 'soon', text: formatTime(mins), cssVar: 'var(--soon)' };
   }
   return { kind: 'free', text: formatTime(mins), cssVar: 'var(--free)' };
@@ -853,10 +862,20 @@ function buildSearchModel(rawQuery) {
   };
 }
 
+// Hex mirror of the :root status custom properties, for the call sites below
+// that assemble inline style strings by hand. Kept beside its only consumers
+// rather than in the component-helpers region, which is deliberately hex-free.
+const STATUS_HEX = { free: '#3fff8b', soon: '#f59e0b', busy: '#ff7166' };
+
+// Adapter over roomStatus() for those same call sites. The uppercase busy
+// label is deliberate and load-bearing — search results render it as-is.
 function roomStatusMeta(room) {
-  if (room.empty === false) return { text: 'IN USE', color: '#ff7166' };
-  const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
-  return { text: formatTime(room.minutes_until_next), color: isSoon ? '#f59e0b' : '#3fff8b' };
+  const st = roomStatus(room);
+  return {
+    kind: st.kind,
+    text: st.kind === 'busy' ? 'IN USE' : st.text,
+    color: STATUS_HEX[st.kind],
+  };
 }
 
 function isMobileSearchOpen() {
@@ -1210,8 +1229,8 @@ function renderSidebarTopRooms(rooms) {
     return;
   }
   best.forEach(room => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
-    const color = isSoon ? '#f59e0b' : '#3fff8b';
+    const isSoon = isClosingSoon(room);
+    const color = isSoon ? STATUS_HEX.soon : STATUS_HEX.free;
     const btn = document.createElement('button');
     btn.style.cssText = `width:100%;display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:2px;transition:background 0.15s;cursor:pointer;border:none;background:transparent;text-align:left`;
     btn.addEventListener('click', () => openRoomDetail(room.building, room.room));
@@ -1295,8 +1314,8 @@ function renderRoomsGrid(rooms) {
 
   const frag = document.createDocumentFragment();
   pinSort(rooms).forEach((room, i) => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
-    const color = isSoon ? '#f59e0b' : '#3fff8b';
+    const isSoon = isClosingSoon(room);
+    const color = isSoon ? STATUS_HEX.soon : STATUS_HEX.free;
     const border = isSoon ? 'rgba(245,158,11,0.2)' : 'rgba(63,255,139,0.1)';
     const pinned = isPinned(room.building, room.room);
     const card = document.createElement('div');
@@ -2261,8 +2280,8 @@ function renderFindRoom(rooms) {
 
   const frag = document.createDocumentFragment();
   sorted.slice(0, 12).forEach((room, i) => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
-    const color  = isSoon ? '#f59e0b' : '#3fff8b';
+    const isSoon = isClosingSoon(room);
+    const color  = isSoon ? STATUS_HEX.soon : STATUS_HEX.free;
     const row = document.createElement('div');
     row.className = 'interactive';
     row.style.cssText = `display:flex;align-items:center;gap:14px;padding:13px 14px;background:rgba(63,255,139,0.03);border:1px solid rgba(63,255,139,0.07);border-radius:2px;cursor:pointer;transition:background 0.15s;min-height:56px`;

@@ -17,6 +17,7 @@ depend on both forms, so consolidation must preserve them.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 
@@ -60,12 +61,29 @@ def _extract(fn_name):
     raise AssertionError(f'unbalanced braces extracting {fn_name}')
 
 
-def _run(expr, threshold=30):
-    """Evaluate `expr` against every case with state.soonThresholdMins set."""
-    script = '\n'.join([
+def _extract_const(name):
+    """Pull a top-level `const NAME = ...;` out of app.js."""
+    src = open(APP_JS, encoding='utf-8').read()
+    m = re.search(rf'^const {re.escape(name)}\s*=.*?;', src, re.M | re.S)
+    assert m, f'could not find const {name}'
+    return m.group(0)
+
+
+def _preamble():
+    """Every piece of app.js the status logic depends on, in dependency order."""
+    return '\n'.join([
+        _extract_const('STATUS_HEX'),
+        _extract('isClosingSoon'),
         _extract('formatTime'),
         _extract('roomStatus'),
         _extract('roomStatusMeta'),
+    ])
+
+
+def _run(expr, threshold=30):
+    """Evaluate `expr` against every case with state.soonThresholdMins set."""
+    script = '\n'.join([
+        _preamble(),
         f'const state = {{ soonThresholdMins: {threshold} }};',
         f'const cases = {json.dumps(CASES)};',
         f'console.log(JSON.stringify(cases.map(room => ({expr}))));',
@@ -145,9 +163,7 @@ def test_undefined_minutes_is_treated_as_free_all_day_not_soon():
     case above instead. Pinned here so the equivalence is deliberate.
     """
     script = '\n'.join([
-        _extract('formatTime'),
-        _extract('roomStatus'),
-        _extract('roomStatusMeta'),
+        _preamble(),
         'const state = { soonThresholdMins: 30 };',
         'const r = { empty: true };',
         'console.log(JSON.stringify('
@@ -157,3 +173,38 @@ def test_undefined_minutes_is_treated_as_free_all_day_not_soon():
                          timeout=20)
     assert out.returncode == 0, out.stderr
     assert json.loads(out.stdout) == ['free', '#3fff8b', 'FREE ALL DAY']
+
+
+def test_the_soon_comparison_is_written_exactly_once():
+    """The duplication this file was written to remove must not grow back.
+
+    Four call sites each carried their own copy of the threshold comparison.
+    Any new copy is a place the logic can drift, and none of the tests above
+    would notice, because they only exercise the two named functions.
+    """
+    src = open(APP_JS, encoding='utf-8').read()
+    occurrences = src.count('<= state.soonThresholdMins')
+    assert occurrences == 1, (
+        f'found {occurrences} copies of the closing-soon comparison; it '
+        'belongs only in isClosingSoon()'
+    )
+
+
+def test_status_hex_literals_are_not_retyped_at_call_sites():
+    """Same argument for the colours: STATUS_HEX or the :root var, not literals.
+
+    occColor() is excluded — it maps an occupancy percentage, not a room
+    status, and happens to reuse the same three hues.
+    """
+    src = open(APP_JS, encoding='utf-8').read()
+    occ_start = src.index('function occColor(')
+    occ_end = src.index('}', src.index('return', occ_start))
+    without_occ = src[:occ_start] + src[occ_end:]
+    hex_start = without_occ.index('const STATUS_HEX')
+    hex_end = without_occ.index(';', hex_start)
+    body = without_occ[:hex_start] + without_occ[hex_end:]
+    for literal in ('#3fff8b', '#f59e0b', '#ff7166'):
+        # The palette still appears in gradients, borders and glows with
+        # varying alpha; what must not reappear is a bare status swap.
+        assert f"isSoon ? '{literal}'" not in body
+        assert f": '{literal}'\n" not in body
