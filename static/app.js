@@ -1939,16 +1939,41 @@ function setGeoStatus(msg, color) {
   el.classList.remove('hidden');
 }
 
+// How trustworthy is a distance ranking at this GPS accuracy?
+// Calibrated against the real campus, not taste: NJIT's 18 buildings span
+// 465 m, with a median gap of 177 m between them. 50 m is under a third of
+// that median, so ordering holds. Past 150 m the error approaches the whole
+// campus and the ranking would be noise dressed up as an answer.
+function locationQuality(accuracyMeters) {
+  const a = Number(accuracyMeters);
+  if (!Number.isFinite(a) || a <= 0) {
+    return { tier: 'unusable', message: "Your device didn't report how accurate its location is, so rooms aren't ranked by distance." };
+  }
+  if (a <= 50) return { tier: 'good', message: '' };
+  if (a <= 150) {
+    return { tier: 'coarse', message: `Location accurate to ±${Math.round(a)} m — nearby buildings may be out of order.` };
+  }
+  return { tier: 'unusable', message: `Location only accurate to ±${Math.round(a)} m, which is too coarse to rank by distance on this campus.` };
+}
+
 function requestLocation() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error('unsupported'));
     navigator.geolocation.getCurrentPosition(
       pos => {
-        state.userPos = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+        state.userPos = {
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude,
+          // Kept so callers can judge whether a ranking is honest. Previously
+          // discarded, which made a +/-8 m fix and a +/-90 m fix look identical.
+          accuracy: pos.coords.accuracy,
+        };
         resolve(state.userPos);
       },
       err => reject(err),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+      // 60s of cached position is ~80 m of walking on a 465 m campus — enough
+      // to silently corrupt the ranking the user just asked for.
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 }
     );
   });
 }
@@ -1980,9 +2005,22 @@ async function setFindRoomSort(mode) {
         return;
       }
     }
+    // A fix too coarse to separate buildings must not be dressed up as a
+    // ranking — fall back rather than present noise as an answer.
+    const q = locationQuality(state.userPos.accuracy);
+    if (q.tier === 'unusable') {
+      setGeoStatus(q.message + ' Sorting by free time instead.', '#f59e0b');
+      state.frSort = 'time';
+      _updateSortButtons();
+      renderFindRoom(state.frLastRooms);
+      return;
+    }
+
     // Off campus, distance ranking is meaningless.
     const far = haversineMeters(state.userPos.lat, state.userPos.lon, 40.7424, -74.1779) > 3000;
     if (far) setGeoStatus("You look far from campus — distances are from NJIT's Newark campus.", '#f59e0b');
+    else if (q.tier === 'coarse') setGeoStatus(q.message, '#f59e0b');
+    else setGeoStatus('');
   }
   state.frSort = mode;
   _updateSortButtons();
