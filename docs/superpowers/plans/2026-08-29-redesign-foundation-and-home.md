@@ -73,9 +73,16 @@ DYNAMIC_IDS = {'search-opt'}
 
 
 def referenced_element_ids():
-    """Ids app.js passes to $() as a plain string literal."""
+    """Ids app.js passes to $() or setText() as plain string literals.
+
+    setText(id, val) calls $(id) with a variable, so matching only $('literal')
+    misses 43 call sites — including table-count, which a later task depends on
+    this test flagging. A guard rail that cannot fail is not one.
+    """
     js = open(APP_JS, encoding='utf-8').read()
-    ids = set(re.findall(r"""\$\(\s*['"]([A-Za-z0-9_-]+)['"]\s*\)""", js))
+    dollar_ids = set(re.findall(r"""\$\(\s*['"]([A-Za-z0-9_-]+)['"]\s*\)""", js))
+    settext_ids = set(re.findall(r"""setText\s*\(\s*['"]([A-Za-z0-9_-]+)['"]\s*,""", js))
+    ids = dollar_ids | settext_ids
     return {i for i in ids if not any(i.startswith(d) for d in DYNAMIC_IDS)}
 
 
@@ -109,10 +116,7 @@ cd /Users/shawngeorgie/Projects/Room-Finder
 .venv/bin/python -m pytest tests/test_frontend_contract.py -v
 ```
 
-Expected: `test_every_referenced_element_exists_in_template` FAILS with:
-`app.js reads elements that the template does not define: building-bars, health-bar`
-
-These are two genuine pre-existing orphans: `renderHealthBars()` writes into `building-bars`, which no longer exists in the template.
+Expected: `test_every_referenced_element_exists_in_template` FAILS listing five genuine pre-existing orphans: `building-bars` and `health-bar` (written by `renderHealthBars()`), plus `health-bldg`, `health-occ`, and `health-sections` (written by `updateStats()` via `setText`). All five reference elements that no longer exist in the template.
 
 - [ ] **Step 3: Delete the dead render code**
 
