@@ -29,7 +29,17 @@ module.exports = {
         "on-primary": "#005d2c","on-primary-fixed": "#004820"
       },
       fontFamily: { "headline": ["Space Grotesk"],"body": ["Manrope"],"label": ["Space Grotesk"] },
-      borderRadius: {"DEFAULT": "0.125rem","lg": "0.25rem","xl": "0.5rem","full": "0.75rem"},
+      // `full` was 0.75rem, so every rounded-full element rendered as a
+      // ~12px blob rather than a circle. The rest of the scale was capped
+      // at 8px, which made a soft surface impossible anywhere in the app.
+      borderRadius: {
+        "sm": "4px",
+        "DEFAULT": "6px",
+        "lg": "10px",
+        "xl": "14px",
+        "2xl": "20px",
+        "full": "9999px",
+      },
     },
   },
   plugins: [
