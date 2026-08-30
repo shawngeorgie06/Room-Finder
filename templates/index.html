@@ -337,9 +337,11 @@
 
       <!-- Dashboard Grid -->
       <div>
-        <div class="flex items-center justify-between gap-3 mb-4">
+        <!-- Stacked below sm: at 375px the heading, both control pills and the
+             count cannot share a line without the count wrapping out of view. -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3 mb-4">
           <h2 class="text-title text-white">Buildings</h2>
-          <div id="buildings-controls" class="flex items-center gap-2 flex-wrap justify-end"></div>
+          <div id="buildings-controls" class="flex items-center gap-2 flex-wrap sm:justify-end"></div>
         </div>
         <div id="buildings-geo-status" class="hidden text-label font-label mb-3"></div>
         <div id="buildings-grid" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2"></div>
