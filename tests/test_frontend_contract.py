@@ -16,9 +16,13 @@ DYNAMIC_IDS = {'search-opt'}
 
 
 def referenced_element_ids():
-    """Ids app.js passes to $() as a plain string literal."""
+    """Ids app.js passes to $() or setText() as plain string literals."""
     js = open(APP_JS, encoding='utf-8').read()
-    ids = set(re.findall(r"""\$\(\s*['"]([A-Za-z0-9_-]+)['"]\s*\)""", js))
+    # Capture ids from $('id') calls
+    dollar_ids = set(re.findall(r"""\$\(\s*['"]([A-Za-z0-9_-]+)['"]\s*\)""", js))
+    # Capture ids from setText('id', ...) calls
+    settext_ids = set(re.findall(r"""setText\s*\(\s*['"]([A-Za-z0-9_-]+)['"]\s*,""", js))
+    ids = dollar_ids | settext_ids
     return {i for i in ids if not any(i.startswith(d) for d in DYNAMIC_IDS)}
 
 

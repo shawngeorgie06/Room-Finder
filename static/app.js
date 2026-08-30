@@ -357,9 +357,6 @@ function updateStats(buildings) {
   setText('hdr-occ', occ);
   const dayFull = state.dayAt || new Date().toLocaleDateString('en-US', { weekday: 'long' });
   setText('hdr-day', dayFull);
-  setText('health-sections', (totalRooms * 3).toLocaleString());
-  setText('health-bldg', buildings.length);
-  setText('health-occ', occ + '%');
 }
 
 
