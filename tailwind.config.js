@@ -31,6 +31,13 @@ module.exports = {
         "unknown": "#767575",
       },
       fontFamily: { "headline": ["Space Grotesk"],"body": ["Manrope"],"label": ["Space Grotesk"] },
+      fontSize: {
+        "display": ["32px", { lineHeight: "1.1",  letterSpacing: "-0.03em", fontWeight: "800" }],
+        "title":   ["20px", { lineHeight: "1.25", letterSpacing: "-0.01em", fontWeight: "700" }],
+        "body":    ["15px", { lineHeight: "1.6" }],
+        "data":    ["18px", { lineHeight: "1.1",  letterSpacing: "-0.01em", fontWeight: "800" }],
+        "label":   ["11px", { lineHeight: "1.3",  letterSpacing: "0.08em", fontWeight: "600" }],
+      },
       // `full` was 0.75rem, so every rounded-full element rendered as a
       // ~12px blob rather than a circle. The rest of the scale was capped
       // at 8px, which made a soft surface impossible anywhere in the app.
