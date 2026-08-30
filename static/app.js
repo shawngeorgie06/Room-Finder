@@ -56,6 +56,7 @@ const state = {
   timeFor: 0,      // minimum free duration in minutes (0 = any)
   dayAt: '',       // day override ('Monday'…'Sunday', empty = today)
   freeAllDay: false, // show only rooms free for rest of day
+  savedOnly: false,   // Rooms view: show only pinned rooms
   soonThresholdMins: 30,  // configurable "busy soon" threshold in minutes
   hideFullBuildings: true,  // hide buildings with nothing free (home grid)
   buildingSort: 'free',     // home grid ranking: 'free' | 'distance'
@@ -106,6 +107,7 @@ function syncURL() {
   if (state.timeFor)  params.set('for', String(state.timeFor));
   if (state.dayAt)    params.set('day', state.dayAt);
   if (state.freeAllDay) params.set('freeAllDay', '1');
+  if (state.savedOnly) params.set('saved', '1');
   if (state.soonThresholdMins !== 30) params.set('soon', String(state.soonThresholdMins));
   if (state.detailRoom) params.set('room', state.detailRoom);
   const newURL = params.toString() ? '?' + params.toString() : window.location.pathname;
@@ -121,12 +123,14 @@ function restoreStateFromURL() {
   const forMins  = params.get('for');
   const day      = params.get('day');
   const fad      = params.get('freeAllDay');
+  const saved    = params.get('saved');
 
   if (building) state.building = building;
   if (at)       state.timeAt   = at;
   if (forMins)  state.timeFor  = parseInt(forMins) || 0;
   if (day)    { state.dayAt = day; const sel = $('day-filter'); if (sel) sel.value = day; }
   if (fad)    { state.freeAllDay = true; _updateFreeAllDayBtn(true); }
+  if (saved === '1') { state.savedOnly = true; updateSavedFilterButtons(); }
 
   const soon = params.get('soon');
   if (soon) {
@@ -1281,7 +1285,12 @@ function renderRoomsGridSkeleton() {
 function renderRoomsGrid(rooms) {
   const container = $('rooms-container');
   if (!container) return;
-  setText('grid-count', `${rooms.length} rooms available`);
+  updateSavedFilterButtons();
+  const visibleRooms = state.savedOnly
+    ? rooms.filter(room => isPinned(room.building, room.room))
+    : rooms;
+  const noun = state.savedOnly ? 'saved room' : 'room';
+  setText('grid-count', `${visibleRooms.length} ${noun}${visibleRooms.length === 1 ? '' : 's'}${state.savedOnly ? '' : ' available'}`);
   const _ts = $('grid-timestamp');
   if (_ts) {
     const _now = new Date();
@@ -1289,7 +1298,7 @@ function renderRoomsGrid(rooms) {
   }
   container.textContent = '';
 
-  if (!rooms.length) {
+  if (!visibleRooms.length) {
     const _emptyDiv = document.createElement('div');
     _emptyDiv.className = 'col-span-full flex flex-col items-center justify-center py-24 gap-4';
     const _emptyIcon = document.createElement('span');
@@ -1300,10 +1309,12 @@ function renderRoomsGrid(rooms) {
     _emptyText.style.textAlign = 'center';
     const _emptyTitle = document.createElement('div');
     _emptyTitle.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:700;color:#adaaaa;text-transform:uppercase;letter-spacing:0.15em";
-    _emptyTitle.textContent = 'No empty rooms right now';
+    _emptyTitle.textContent = state.savedOnly ? 'No saved rooms yet' : 'No empty rooms right now';
     const _emptySub = document.createElement('div');
     _emptySub.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:10px;color:#555;margin-top:6px";
-    _emptySub.textContent = 'Try adjusting filters or checking a different time';
+    _emptySub.textContent = state.savedOnly
+      ? 'Tap ★ on any room to save it.'
+      : 'Try adjusting filters or checking a different time';
     _emptyText.appendChild(_emptyTitle);
     _emptyText.appendChild(_emptySub);
     _emptyDiv.appendChild(_emptyIcon);
@@ -1313,7 +1324,7 @@ function renderRoomsGrid(rooms) {
   }
 
   const frag = document.createDocumentFragment();
-  pinSort(rooms).forEach((room, i) => {
+  pinSort(visibleRooms).forEach((room, i) => {
     const isSoon = isClosingSoon(room);
     const color = isSoon ? STATUS_HEX.soon : STATUS_HEX.free;
     const border = isSoon ? 'rgba(245,158,11,0.2)' : 'rgba(63,255,139,0.1)';
@@ -1789,6 +1800,34 @@ function hideUploadStatus() {
   if (el) el.classList.add('hidden');
 }
 
+// ── Saved room filter ─────────────────────────────────────────────────────
+function updateSavedFilterButtons() {
+  const all = $('rooms-all-btn');
+  const saved = $('saved-rooms-btn');
+  const active = 'background:#3fff8b;color:#005d2c;border-color:#3fff8b';
+  const inactive = 'background:transparent;color:#adaaaa;border-color:rgba(255,255,255,0.08)';
+  if (all) {
+    all.setAttribute('aria-pressed', state.savedOnly ? 'false' : 'true');
+    all.style.cssText = state.savedOnly ? inactive : active;
+  }
+  if (saved) {
+    saved.setAttribute('aria-pressed', state.savedOnly ? 'true' : 'false');
+    saved.style.cssText = state.savedOnly ? active : inactive;
+  }
+}
+
+function setSavedOnly(enabled) {
+  state.savedOnly = enabled;
+  updateSavedFilterButtons();
+  renderRoomsGrid(state.lastRoomsData);
+  syncURL();
+  announce(enabled ? 'Showing saved rooms.' : 'Showing all available rooms.');
+}
+
+function toggleSavedOnly() {
+  setSavedOnly(!state.savedOnly);
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function minToTime(min) {
   const h = Math.floor(min / 60) % 24;
@@ -2044,21 +2083,20 @@ function roomDistanceMeters(room) {
 }
 
 // Haversine gives a straight-line distance. Campus paths, crossings and
-// building entrances make a walk about 30% longer on average; keep the
-// correction at the display boundary so the ranking remains stable while the
-// label describes the distance a person is likely to walk.
-const WALKING_PATH_FACTOR = 1.3;
+// building entrances make a walk about 40% longer on average. Keep the
+// correction on time only: the metres are still a measured straight-line
+// distance, while the walk estimate reflects the route a person takes.
+const WALKING_PATH_TIME_FACTOR = 1.4;
 const WALKING_METERS_PER_SECOND = 1.35;
 
 function formatDistance(straightLineMeters) {
   if (straightLineMeters === null || straightLineMeters === undefined) return '';
-  // A nearby fix is still useful for recognizing the building even though a
-  // path multiplier would push the building entrance over the cutoff.
-  if (straightLineMeters < 50) return "you're in this building";
-  const walkingMeters = straightLineMeters * WALKING_PATH_FACTOR;
-  if (walkingMeters >= 1000) return `${(walkingMeters / 1000).toFixed(1)} km away`;
-  const mins = Math.max(1, Math.round(walkingMeters / WALKING_METERS_PER_SECOND / 60));
-  return `${Math.round(walkingMeters)} m · ${mins} min walk`;
+  if (straightLineMeters < 50) return 'under 50 m away';
+  if (straightLineMeters >= 1000) return `${(straightLineMeters / 1000).toFixed(1)} km away`;
+  const mins = Math.max(1, Math.ceil(
+    straightLineMeters / WALKING_METERS_PER_SECOND / 60 * WALKING_PATH_TIME_FACTOR
+  ));
+  return `${Math.round(straightLineMeters)} m · ${mins} min walk`;
 }
 
 function setGeoStatus(msg, color) {

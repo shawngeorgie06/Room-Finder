@@ -140,7 +140,7 @@ def test_position_with_no_timestamp_is_stale():
 
 
 def _run_distance(distances):
-    script = (_extract_const('WALKING_PATH_FACTOR') + '\n'
+    script = (_extract_const('WALKING_PATH_TIME_FACTOR') + '\n'
               + _extract_const('WALKING_METERS_PER_SECOND') + '\n'
               + _extract('formatDistance') + '\n') + (
         'console.log(JSON.stringify('
@@ -156,15 +156,15 @@ def _run_distance(distances):
 def test_distance_labels_allow_for_campus_walking_paths():
     """The Haversine value is straight-line distance, not a walkable route.
 
-    Keep the nearby-building wording based on the direct distance, but apply
-    the campus path correction before printing outdoor metres, kilometres, or
-    walking time. This prevents a direct 800 m estimate from being presented
-    as an 800 m walk.
+    Keep the displayed distance based on the direct measurement, but apply
+    the campus path correction only to walking time. The estimate rounds up
+    so a path correction never understates how long the walk may take.
     """
-    assert _run_distance([40, 100, 800, 1000, None]) == [
-        "you're in this building",
-        '130 m · 2 min walk',
+    assert _run_distance([40, 100, 180, 800, 1000, None]) == [
+        'under 50 m away',
+        '100 m · 2 min walk',
+        '180 m · 4 min walk',
+        '800 m · 14 min walk',
         '1.0 km away',
-        '1.3 km away',
         '',
     ]

@@ -366,6 +366,18 @@
         <!-- Primary row -->
         <div class="flex items-center gap-3 px-4 py-3 overflow-x-auto" style="-webkit-overflow-scrolling:touch;scrollbar-width:none">
           <span class="material-symbols-outlined text-primary shrink-0" style="font-size:18px">schedule</span>
+          <div role="group" aria-label="Room scope" class="flex items-center shrink-0">
+            <button id="rooms-all-btn" type="button" onclick="setSavedOnly(false)"
+                    aria-pressed="true"
+                    class="px-3 py-1.5 text-label font-bold font-label uppercase tracking-widest border rounded-l-sm transition-all">
+              All
+            </button>
+            <button id="saved-rooms-btn" type="button" onclick="toggleSavedOnly()"
+                    aria-pressed="false"
+                    class="px-3 py-1.5 text-label font-bold font-label uppercase tracking-widest border border-l-0 rounded-r-sm transition-all">
+              ★ Saved
+            </button>
+          </div>
           <select id="day-filter"
                   onchange="applyTimeFilter()"
                   class="shrink-0 bg-surface-container border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">

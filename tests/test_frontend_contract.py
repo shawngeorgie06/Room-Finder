@@ -104,3 +104,18 @@ def test_view_alias_variable_is_reassignable():
         "`view` is declared with const but is reassigned by the 'buildings' "
         "alias — this throws TypeError and kills init(). Use `let`."
     )
+
+
+def test_saved_rooms_filter_has_markup_state_and_shareable_url_support():
+    """Saved is a Rooms scope, so it must survive refreshes and shared links."""
+    js = open(APP_JS, encoding='utf-8').read()
+    html = open(INDEX_HTML, encoding='utf-8').read()
+    assert 'savedOnly: false' in js
+    assert "params.set('saved', '1')" in js
+    assert "params.get('saved')" in js
+    assert 'function setSavedOnly(enabled)' in js
+    assert "rooms.filter(room => isPinned(room.building, room.room))" in js
+    assert 'id="rooms-all-btn"' in html
+    assert 'id="saved-rooms-btn"' in html
+    assert 'No saved rooms yet' in js
+    assert 'Tap ★ on any room to save it.' in js
