@@ -417,113 +417,545 @@ function applyThreshold() {
   syncURL();
 }
 
-// ── Global search ──────────────────────────────────────────────────────────
-function matchRooms(q) {
-  const source = state.allRoomsCache.length ? state.allRoomsCache : state.allRoomsData;
-  return source.filter(room => {
-    const full     = `${room.building} ${room.room}`.toLowerCase();
-    const roomOnly = String(room.room).toLowerCase();
-    const name     = (BUILDING_NAMES[room.building] || '').toLowerCase();
-    return full.includes(q) || roomOnly.includes(q) || name.includes(q);
-  });
+// ── Global search (grouped as-you-type autocomplete) ───────────────────────
+const SEARCH_STOPWORDS = new Set(['floor', 'fl', 'the', 'room', 'rooms', 'building', 'bldg', 'hall', 'at']);
+const FLOOR_ALIASES = {
+  ground: 0, grd: 0, gnd: 0, basement: 0, bsmt: 0,
+  first: 1, '1st': 1,
+  second: 2, '2nd': 2,
+  third: 3, '3rd': 3,
+  fourth: 4, '4th': 4,
+  fifth: 5, '5th': 5,
+  sixth: 6, '6th': 6,
+  seventh: 7, '7th': 7,
+};
+const SEARCH_DEBOUNCE_MS = 150;
+const SEARCH_MAX_BUILDINGS = 6;
+const SEARCH_MAX_ROOMS = 8;
+
+let searchDebounceTimer = null;
+let searchActiveIndex = -1;
+let searchFlatItems = [];
+let searchPanelOpen = false;
+
+function normalizeSearchQuery(raw) {
+  return String(raw || '').trim().toLowerCase().replace(/[-_/,]+/g, ' ').replace(/\s+/g, ' ');
 }
 
-function globalSearch(query) {
-  const q = query.trim().toLowerCase();
-  const overlayOpen = isMobileSearchOpen();
+function floorLabel(floor) {
+  if (floor === 0) return 'Ground';
+  const v = floor % 100;
+  const suffix = (v >= 11 && v <= 13) ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[floor % 10] || 'th');
+  return `${floor}${suffix} floor`;
+}
+
+function parseFloorFromTokens(tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (FLOOR_ALIASES[t] !== undefined) return FLOOR_ALIASES[t];
+    const m = t.match(/^(?:fl(?:oor)?)(\d+)$/);
+    if (m) return parseInt(m[1], 10);
+    if ((t === 'floor' || t === 'fl') && /^\d+$/.test(tokens[i + 1] || '')) {
+      return parseInt(tokens[i + 1], 10);
+    }
+  }
+  return null;
+}
+
+function editDistance(a, b) {
+  if (Math.abs(a.length - b.length) > 2) return 9;
+  const al = a.length, bl = b.length;
+  const prev = new Array(bl + 1);
+  for (let j = 0; j <= bl; j++) prev[j] = j;
+  for (let i = 1; i <= al; i++) {
+    let prevDiag = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= bl; j++) {
+      const tmp = prev[j];
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, prevDiag + cost);
+      prevDiag = tmp;
+    }
+  }
+  return prev[bl];
+}
+
+function searchRoomSource() {
+  return state.allRoomsCache.length ? state.allRoomsCache : state.allRoomsData;
+}
+
+function scoreBuilding(q, tokens, b) {
+  const code = b.building.toLowerCase();
+  const name = (BUILDING_NAMES[b.building] || '').toLowerCase();
+  if (code === q || name === q) return 100;
+  if (tokens.some(t => t === code)) return 92;
+  if (code.startsWith(q)) return 90;
+  if (name.startsWith(q)) return 85;
+  if (name.includes(q)) return 75;
+  if (code.includes(q)) return 70;
+  if (tokens.some(t => t.length >= 3 && (name.includes(t) || code.includes(t)))) return 65;
+  return 0;
+}
+
+function roomMatchesQuery(room, q, tokens, floorFilter, buildingCodes) {
+  const code = room.building.toLowerCase();
+  const num = String(room.room).toLowerCase();
+  const name = (BUILDING_NAMES[room.building] || '').toLowerCase();
+  const full = `${code} ${num}`;
+  const compact = `${code}${num}`;
+  if (full.includes(q) || compact.includes(q.replace(/ /g, '')) || num.includes(q) || name.includes(q)) {
+    if (floorFilter !== null && buildingCodes.length && !buildingCodes.includes(room.building)) return false;
+    if (floorFilter !== null && buildingCodes.length && room.floor !== floorFilter) return false;
+    return true;
+  }
+  if (floorFilter !== null && room.floor === floorFilter) {
+    return !buildingCodes.length || buildingCodes.includes(room.building);
+  }
+  return false;
+}
+
+function scoreRoom(room, q, tokens) {
+  const num = String(room.room).toLowerCase();
+  const last = tokens[tokens.length - 1] || q;
+  let s = 0;
+  if (num === last || num === q) s += 50;
+  else if (num.startsWith(last)) s += 30;
+  else if (num.includes(last)) s += 15;
+  if (room.empty !== false) s += 10;
+  if (room.minutes_until_next === null) s += 5;
+  return s;
+}
+
+function buildingCodesFromTokens(tokens, buildings) {
+  const codes = [];
+  for (const t of tokens) {
+    if (!t || SEARCH_STOPWORDS.has(t) || FLOOR_ALIASES[t] !== undefined) continue;
+    for (const b of buildings) {
+      const code = b.building.toLowerCase();
+      const name = (BUILDING_NAMES[b.building] || '').toLowerCase();
+      if (code === t || code.startsWith(t) || (t.length >= 3 && name.includes(t))) {
+        if (!codes.includes(b.building)) codes.push(b.building);
+      }
+    }
+  }
+  return codes;
+}
+
+function nearbySearchSuggestions(q, buildings, rooms) {
+  const out = [];
+  const seenB = new Set();
+  const seenR = new Set();
+  for (const b of buildings) {
+    const code = b.building.toLowerCase();
+    const name = (BUILDING_NAMES[b.building] || '').toLowerCase();
+    const dCode = editDistance(q, code);
+    const dName = q.length >= 3 ? editDistance(q, name.slice(0, Math.max(q.length, 4))) : 9;
+    if ((dCode > 0 && dCode <= 2) || (dName > 0 && dName <= 2)) {
+      out.push({ kind: 'building', data: b });
+      seenB.add(b.building);
+    }
+    if (out.length >= 3) return out;
+  }
+  const digits = q.replace(/\D/g, '');
+  if (digits.length >= 2) {
+    for (const r of rooms) {
+      const num = String(r.room);
+      const nd = num.replace(/\D/g, '');
+      if (num.includes(digits) || (nd.length >= 2 && editDistance(digits, nd) <= 1)) {
+        const key = `${r.building}|${r.room}`;
+        if (seenR.has(key)) continue;
+        out.push({ kind: 'room', data: r });
+        seenR.add(key);
+        if (out.length >= 3) return out;
+      }
+    }
+  }
+  for (const r of _sortedBestRooms(rooms.filter(rm => rm.empty !== false), 3)) {
+    if (out.length >= 3) break;
+    const key = `${r.building}|${r.room}`;
+    if (seenR.has(key)) continue;
+    out.push({ kind: 'room', data: r });
+    seenR.add(key);
+  }
+  return out.slice(0, 3);
+}
+
+function buildSearchModel(rawQuery) {
+  const q = normalizeSearchQuery(rawQuery);
+  const buildings = state.buildingsData || [];
+  const rooms = searchRoomSource();
 
   if (!q) {
-    // Clear search: restore normal rooms view
-    state.building = '';
-    if (overlayOpen) renderMobileSearchResults(null);
-    else fetchRooms();
-    return;
+    return {
+      query: '',
+      emptyQuery: true,
+      buildings: [...buildings].sort((a, b) => b.empty_rooms - a.empty_rooms).slice(0, 3),
+      rooms: _sortedBestRooms(rooms.filter(r => r.empty !== false), 3),
+      nearby: [],
+      findRoom: true,
+    };
   }
 
-  const matches = matchRooms(q);
-  // Only show empty rooms in search results (consistent with rooms view)
-  const emptyMatches = matches.filter(r => r.empty !== false);
+  const tokens = q.split(' ').filter(Boolean);
+  const floorFilter = parseFloorFromTokens(tokens);
+  const bldgCodes = buildingCodesFromTokens(tokens, buildings);
 
-  if (overlayOpen) {
-    // Render inside the overlay — switching views behind it would put the
-    // results under a full-screen backdrop where nobody can see them.
-    renderMobileSearchResults(emptyMatches, query);
-    return;
-  }
+  const scoredBuildings = buildings
+    .map(b => ({ b, score: scoreBuilding(q, tokens, b) }))
+    .filter(x => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, SEARCH_MAX_BUILDINGS)
+    .map(x => x.b);
 
-  switchView('rooms');
-  renderRoomsGrid(emptyMatches);
-  // After renderRoomsGrid — it sets grid-count itself and would otherwise
-  // overwrite the search context with a plain "N rooms available".
-  const n = emptyMatches.length;
-  setText('grid-count', n === 1 ? `1 room matches "${query}"` : `${n} rooms match "${query}"`);
-  announce(`${emptyMatches.length} rooms match ${query}.`);
+  const matchedRooms = rooms
+    .filter(r => roomMatchesQuery(r, q, tokens, floorFilter, bldgCodes))
+    .sort((a, b) => scoreRoom(b, q, tokens) - scoreRoom(a, q, tokens))
+    .slice(0, SEARCH_MAX_ROOMS);
+
+  const hasHits = scoredBuildings.length + matchedRooms.length > 0;
+  return {
+    query: rawQuery.trim(),
+    emptyQuery: false,
+    buildings: scoredBuildings,
+    rooms: matchedRooms,
+    nearby: hasHits ? [] : nearbySearchSuggestions(q, buildings, rooms),
+    findRoom: !hasHits,
+  };
 }
 
-// ── Mobile search overlay ──────────────────────────────────────────────────
+function roomStatusMeta(room) {
+  if (room.empty === false) return { text: 'IN USE', color: '#ff7166' };
+  const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
+  return { text: formatTime(room.minutes_until_next), color: isSoon ? '#f59e0b' : '#3fff8b' };
+}
+
 function isMobileSearchOpen() {
   const overlay = $('mobile-search-overlay');
   return !!overlay && !overlay.classList.contains('hidden');
 }
 
-function renderMobileSearchResults(rooms, query = '') {
-  const container = $('mobile-search-results');
-  if (!container) return;
-  container.textContent = '';
+function isSearchPanelOpen() {
+  return searchPanelOpen || isMobileSearchOpen();
+}
 
-  if (rooms === null) return; // empty query — show nothing, not "no results"
+function syncSearchInputs(value, exceptId) {
+  ['global-search', 'mobile-search-input'].forEach(id => {
+    if (id === exceptId) return;
+    const el = $(id);
+    if (el && el.value !== value) el.value = value;
+  });
+}
 
-  if (!rooms.length) {
-    const empty = document.createElement('div');
-    empty.style.cssText = "text-align:center;padding:32px 8px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em";
-    empty.textContent = `No free rooms match "${query}"`;
-    container.appendChild(empty);
+function setSearchExpanded(expanded) {
+  ['global-search', 'mobile-search-input'].forEach(id => {
+    const el = $(id);
+    if (el) el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  });
+}
+
+function hideSearchPanel() {
+  const el = $('search-results');
+  if (el) {
+    el.classList.add('hidden');
+    el.textContent = '';
+  }
+  searchPanelOpen = false;
+  searchActiveIndex = -1;
+  searchFlatItems = [];
+  const inp = $('global-search');
+  if (inp) inp.removeAttribute('aria-activedescendant');
+  if (!isMobileSearchOpen()) setSearchExpanded(false);
+}
+
+function closeSearchUI({ clear = false } = {}) {
+  hideSearchPanel();
+  if (isMobileSearchOpen()) {
+    const overlay = $('mobile-search-overlay');
+    if (overlay) overlay.classList.add('hidden');
+    const inp = $('mobile-search-input');
+    if (inp) inp.blur();
+  }
+  if (clear) {
+    ['global-search', 'mobile-search-input'].forEach(id => {
+      const el = $(id); if (el) el.value = '';
+    });
+  }
+  setSearchExpanded(false);
+}
+
+function addSearchGroupLabel(parent, text) {
+  const lab = document.createElement('div');
+  lab.setAttribute('role', 'presentation');
+  lab.style.cssText = "padding:10px 14px 6px;font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:#767575;text-transform:uppercase;letter-spacing:0.18em";
+  lab.textContent = text;
+  parent.appendChild(lab);
+}
+
+function makeSearchOption(item, idx) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = `search-opt-${idx}`;
+  btn.setAttribute('role', 'option');
+  btn.setAttribute('aria-selected', 'false');
+  btn.tabIndex = -1;
+  btn.dataset.searchIdx = String(idx);
+  btn.style.cssText = 'width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:52px;padding:10px 14px;background:transparent;border:none;border-bottom:1px solid rgba(255,255,255,0.04);text-align:left;cursor:pointer';
+  btn.addEventListener('mousedown', e => e.preventDefault());
+  btn.addEventListener('click', () => activateSearchItem(item));
+  btn.addEventListener('mouseenter', () => highlightSearchIndex(idx));
+  return btn;
+}
+
+function highlightSearchIndex(idx) {
+  searchActiveIndex = idx;
+  searchFlatItems.forEach((_, i) => {
+    const el = $(`search-opt-${i}`);
+    if (!el) return;
+    const on = i === idx;
+    el.setAttribute('aria-selected', on ? 'true' : 'false');
+    el.style.background = on ? 'rgba(63,255,139,0.08)' : 'transparent';
+  });
+  const active = $(`search-opt-${idx}`);
+  const inp = isMobileSearchOpen() ? $('mobile-search-input') : $('global-search');
+  if (inp) {
+    if (active) inp.setAttribute('aria-activedescendant', active.id);
+    else inp.removeAttribute('aria-activedescendant');
+  }
+  if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
+}
+
+function activateSearchItem(item) {
+  if (!item) return;
+  if (item.kind === 'building') {
+    closeSearchUI({ clear: true });
+    const data = item.data;
+    if (data) openBuildingPanel(data);
     return;
   }
+  if (item.kind === 'room') {
+    const room = item.data;
+    closeSearchUI({ clear: true });
+    if (room) openRoomDetail(room.building, room.room);
+    return;
+  }
+  if (item.kind === 'find') {
+    closeSearchUI({ clear: false });
+    openFindRoom();
+  }
+}
+
+function renderSearchModel(container, model) {
+  if (!container) return;
+  container.textContent = '';
+  searchFlatItems = [];
+  searchActiveIndex = -1;
 
   const frag = document.createDocumentFragment();
-  rooms.slice(0, 30).forEach(room => {
-    const isSoon = room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
-    const color  = isSoon ? '#f59e0b' : '#3fff8b';
-    const btn = document.createElement('button');
-    btn.style.cssText = `width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:56px;padding:12px 14px;background:rgba(63,255,139,0.03);border:1px solid rgba(63,255,139,0.1);border-radius:2px;text-align:left;cursor:pointer`;
-    btn.addEventListener('click', () => {
-      toggleMobileSearch();
-      openRoomDetail(room.building, room.room);
-    });
-    const left = document.createElement('div');
-    left.style.cssText = 'min-width:0';
-    const bldg = document.createElement('div');
-    bldg.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:#767575;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:3px";
-    bldg.textContent = buildingLabel(room.building);
-    const num = document.createElement('div');
-    num.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:19px;font-weight:800;color:#fff;line-height:1";
-    num.textContent = room.room;
-    left.appendChild(bldg);
-    left.appendChild(num);
-    const right = document.createElement('div');
-    right.style.cssText = `font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:700;color:${color};flex-shrink:0;white-space:nowrap`;
-    right.textContent = formatTime(room.minutes_until_next);
-    btn.appendChild(left);
-    btn.appendChild(right);
+  const addItem = (kind, data, builder) => {
+    const item = { kind, data };
+    const idx = searchFlatItems.length;
+    searchFlatItems.push(item);
+    const btn = makeSearchOption(item, idx);
+    builder(btn);
     frag.appendChild(btn);
-  });
+  };
+
+  if (model.emptyQuery) {
+    const hint = document.createElement('div');
+    hint.style.cssText = "padding:12px 14px 4px;font-family:'Space Grotesk',sans-serif;font-size:11px;color:#adaaaa";
+    hint.textContent = 'Type a building code, name, or room number — or pick a suggestion.';
+    frag.appendChild(hint);
+  }
+
+  if (!model.emptyQuery && !model.buildings.length && !model.rooms.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = "padding:16px 14px 8px;font-family:'Space Grotesk',sans-serif";
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:13px;font-weight:700;color:#fff;margin-bottom:4px';
+    title.textContent = 'No results';
+    const sub = document.createElement('div');
+    sub.style.cssText = 'font-size:11px;color:#adaaaa';
+    sub.textContent = model.query ? `Nothing matched “${model.query}”. Try a nearby match or Find Me a Room.` : 'Nothing matched.';
+    empty.appendChild(title);
+    empty.appendChild(sub);
+    frag.appendChild(empty);
+
+    if (model.nearby.length) addSearchGroupLabel(frag, 'Nearby suggestions');
+    model.nearby.forEach(n => {
+      if (n.kind === 'building') {
+        addItem('building', n.data, btn => fillBuildingOption(btn, n.data));
+      } else if (n.kind === 'room') {
+        addItem('room', n.data, btn => fillRoomOption(btn, n.data));
+      }
+    });
+  } else {
+    if (model.buildings.length) {
+      addSearchGroupLabel(frag, 'Buildings');
+      model.buildings.forEach(b => addItem('building', b, btn => fillBuildingOption(btn, b)));
+    }
+    if (model.rooms.length) {
+      addSearchGroupLabel(frag, 'Rooms');
+      model.rooms.forEach(r => addItem('room', r, btn => fillRoomOption(btn, r)));
+    }
+  }
+
+  if (model.findRoom) {
+    addItem('find', null, btn => {
+      btn.setAttribute('aria-label', 'Find Me a Room — best available rooms right now');
+      btn.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;min-width:0">
+          <span class="material-symbols-outlined" style="font-size:18px;color:#3fff8b">search</span>
+          <div>
+            <div style="font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:700;color:#3fff8b">Find Me a Room</div>
+            <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;color:#adaaaa;margin-top:2px">Best available rooms right now</div>
+          </div>
+        </div>
+        <span class="material-symbols-outlined" style="font-size:16px;color:#767575">arrow_forward</span>`;
+    });
+  }
+
   container.appendChild(frag);
+  if (container.id === 'search-results') {
+    container.classList.remove('hidden');
+    searchPanelOpen = true;
+  }
+  setSearchExpanded(true);
+
+  const n = searchFlatItems.length;
+  if (model.emptyQuery) announce('Search suggestions. Type to filter buildings and rooms.');
+  else if (!model.buildings.length && !model.rooms.length) announce(`No results for ${model.query}. ${n} suggestion${n === 1 ? '' : 's'} available.`);
+  else announce(`${model.buildings.length} building${model.buildings.length === 1 ? '' : 's'}, ${model.rooms.length} room${model.rooms.length === 1 ? '' : 's'}.`);
+}
+
+function fillBuildingOption(btn, b) {
+  const free = b.empty_rooms;
+  const total = b.total_rooms;
+  btn.setAttribute('aria-label', `${buildingLabel(b.building)}, ${free} of ${total} rooms free. Open building.`);
+  btn.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;min-width:0">
+      <span class="material-symbols-outlined" style="font-size:18px;color:#3fff8b">apartment</span>
+      <div style="min-width:0">
+        <div style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:800;color:#fff">${esc(b.building)}</div>
+        <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;color:#adaaaa;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(buildingName(b.building))}</div>
+      </div>
+    </div>
+    <div style="font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:700;color:#3fff8b;flex-shrink:0;white-space:nowrap">${free} free</div>`;
+}
+
+function fillRoomOption(btn, room) {
+  const st = roomStatusMeta(room);
+  const fl = Number.isFinite(room.floor) ? floorLabel(room.floor) : '';
+  btn.setAttribute('aria-label', `${buildingName(room.building)} room ${room.room}, ${st.text}. Open schedule.`);
+  btn.innerHTML = `
+    <div style="min-width:0">
+      <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:#767575;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:3px">${esc(buildingLabel(room.building))}${fl ? ' · ' + fl : ''}</div>
+      <div style="font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:800;color:#fff;line-height:1">${esc(room.room)}</div>
+    </div>
+    <div style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:700;color:${st.color};flex-shrink:0;white-space:nowrap">${esc(st.text)}</div>`;
+}
+
+async function runSearch(rawQuery) {
+  await fetchAllRoomsCache();
+  const model = buildSearchModel(rawQuery);
+  const overlayOpen = isMobileSearchOpen();
+  if (overlayOpen) {
+    hideSearchPanel();
+    renderSearchModel($('mobile-search-results'), model);
+    return;
+  }
+  const panel = $('search-results');
+  renderSearchModel(panel, model);
+}
+
+function onSearchInput(value, sourceId) {
+  syncSearchInputs(value, sourceId);
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(() => {
+    searchDebounceTimer = null;
+    runSearch(value);
+  }, SEARCH_DEBOUNCE_MS);
+}
+
+function onSearchFocus(input) {
+  const q = input ? input.value : '';
+  syncSearchInputs(q, input && input.id);
+  runSearch(q);
+}
+
+function onSearchKeydown(e) {
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeSearchUI({ clear: false });
+    if (e.target && e.target.blur) e.target.blur();
+    return;
+  }
+  const navKeys = ['ArrowDown', 'ArrowUp', 'Enter', 'Home', 'End'];
+  if (!navKeys.includes(e.key)) return;
+  e.preventDefault();
+  const pending = searchDebounceTimer;
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = null;
+  const go = () => handleSearchNav(e);
+  if (pending || !searchFlatItems.length) {
+    runSearch(e.target.value || '').then(go);
+  } else {
+    go();
+  }
+}
+
+function handleSearchNav(e) {
+  if (!searchFlatItems.length) return;
+  if (e.key === 'ArrowDown') {
+    highlightSearchIndex((searchActiveIndex + 1) % searchFlatItems.length);
+  } else if (e.key === 'ArrowUp') {
+    highlightSearchIndex((searchActiveIndex - 1 + searchFlatItems.length) % searchFlatItems.length);
+  } else if (e.key === 'Home') {
+    highlightSearchIndex(0);
+  } else if (e.key === 'End') {
+    highlightSearchIndex(searchFlatItems.length - 1);
+  } else if (e.key === 'Enter') {
+    const item = searchFlatItems[searchActiveIndex] || searchFlatItems[0];
+    activateSearchItem(item);
+  }
+}
+
+// Kept as a stable alias — older inline handlers and tests may call it.
+function globalSearch(query) {
+  onSearchInput(query);
+}
+
+function openMobileSearch() {
+  const overlay = $('mobile-search-overlay');
+  if (!overlay) return;
+  hideSearchPanel();
+  overlay.classList.remove('hidden');
+  const headerVal = $('global-search')?.value || '';
+  const inp = $('mobile-search-input');
+  if (inp) {
+    inp.value = headerVal;
+    setTimeout(() => inp.focus(), 0);
+  }
+  runSearch(headerVal);
 }
 
 function toggleMobileSearch() {
   const overlay = $('mobile-search-overlay');
   if (!overlay) return;
-  const isHidden = overlay.classList.contains('hidden');
-  overlay.classList.toggle('hidden', !isHidden);
-  const inp = $('mobile-search-input');
-  if (isHidden) {
-    if (inp) { inp.value = ''; inp.focus(); }
-    renderMobileSearchResults(null);
-  } else if (inp) {
-    inp.blur();
+  if (overlay.classList.contains('hidden')) openMobileSearch();
+  else {
+    overlay.classList.add('hidden');
+    const inp = $('mobile-search-input');
+    if (inp) inp.blur();
+    setSearchExpanded(false);
   }
 }
+
+document.addEventListener('mousedown', e => {
+  if (isMobileSearchOpen()) return;
+  const wrap = $('search-wrap');
+  if (wrap && !wrap.contains(e.target)) hideSearchPanel();
+});
 
 // ── Health bars ────────────────────────────────────────────────────────────
 function _sortedBestRooms(rooms, limit) {
@@ -854,6 +1286,8 @@ function renderBuildingChips(buildings) {
       state.building = value;
       const gs = $('global-search');
       if (gs) gs.value = '';
+      syncSearchInputs('', 'global-search');
+      hideSearchPanel();
       renderBuildingChips(buildings);
       fetchRooms();
       syncURL();
@@ -1717,15 +2151,18 @@ async function fetchSemesterLabel() {
 // Close overlays on Escape; press / to focus search
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
+    if (isSearchPanelOpen()) {
+      closeSearchUI({ clear: false });
+      return;
+    }
     closeRoomDetail();
     closeFindRoom();
     closeFloorPanel();
-    if (isMobileSearchOpen()) toggleMobileSearch();
   }
   if (e.key === '/' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
     e.preventDefault();
     const search = $('global-search');
-    if (search) { search.focus(); switchView('rooms'); }
+    if (search) search.focus();
   }
 });
 

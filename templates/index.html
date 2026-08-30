@@ -75,6 +75,29 @@
   @media (hover: none) {
     .interactive:hover { background: inherit !important; }
   }
+  /* Persistent search: grouped autocomplete panel under the header field.
+     On phones the panel is fixed below the 64px header so it is tappable
+     without a separate mystery overlay. */
+  .search-slash-hint {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    font-family: 'Space Grotesk', sans-serif; font-size: 10px; font-weight: 700;
+    line-height: 1; padding: 3px 6px;
+    border: 1px solid rgba(173,170,170,0.35); border-radius: 2px;
+    color: #767575; pointer-events: none;
+  }
+  .search-results-panel {
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px);
+    z-index: 60; max-height: min(70vh, 28rem); overflow-y: auto;
+    background: #0e0e0e; border: 1px solid rgba(63,255,139,0.2); border-radius: 2px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.75);
+    scrollbar-width: thin; scrollbar-color: rgba(63,255,139,0.15) transparent;
+  }
+  @media (max-width: 639px) {
+    .search-results-panel {
+      position: fixed; left: 0.75rem; right: 0.75rem; top: 64px;
+      max-height: calc(100vh - 64px - 4.5rem - env(safe-area-inset-bottom, 0px));
+    }
+  }
   /* Skip link: hidden until focused. Plain CSS rather than Tailwind's
      focus:not-sr-only, which is absent from the prebuilt stylesheet. */
   .skip-link {
@@ -102,36 +125,48 @@
 <div class="scanline" aria-hidden="true"></div>
 
 <!-- TOP NAVIGATION -->
-<header class="fixed top-0 w-full z-50 flex justify-between items-center px-6 h-16 bg-[#0e0e0e]/90 backdrop-blur-md text-[#00E676] font-headline tracking-tighter uppercase border-b border-primary/20 shadow-[0_0_30px_rgba(0,0,0,0.5)]">
-  <div class="flex items-center gap-4">
-    <div class="flex items-center gap-2">
-      <span class="w-2 h-2 bg-primary shadow-[0_0_8px_#3fff8b]"></span>
-      <span class="text-xl font-bold tracking-widest text-[#00E676]">NJIT Room Finder</span>
-    </div>
+<header class="fixed top-0 w-full z-50 flex items-center gap-3 px-3 sm:px-6 h-16 bg-[#0e0e0e]/90 backdrop-blur-md text-[#00E676] font-headline tracking-tighter uppercase border-b border-primary/20 shadow-[0_0_30px_rgba(0,0,0,0.5)]">
+  <div class="flex items-center gap-2 shrink-0">
+    <span class="w-2 h-2 bg-primary shadow-[0_0_8px_#3fff8b]"></span>
+    <span class="text-lg sm:text-xl font-bold tracking-widest text-[#00E676]">
+      <span class="sm:hidden">NJIT</span>
+      <span class="hidden sm:inline">NJIT Room Finder</span>
+    </span>
   </div>
-  <div class="flex items-center gap-4">
-    <div class="flex items-center gap-4 px-4 border-r border-outline-variant/30 text-[10px] font-label tracking-widest hidden sm:flex">
+  <div id="search-wrap" class="relative flex-1 min-w-0 max-w-xl">
+    <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none" style="font-size:18px">search</span>
+    <input
+      id="global-search"
+      type="text"
+      role="combobox"
+      aria-autocomplete="list"
+      aria-expanded="false"
+      aria-controls="search-results"
+      aria-haspopup="listbox"
+      aria-keyshortcuts="/"
+      aria-label="Search rooms and buildings. Press slash to focus."
+      placeholder="Search rooms &amp; buildings"
+      oninput="onSearchInput(this.value, 'global-search')"
+      onfocus="onSearchFocus(this)"
+      onkeydown="onSearchKeydown(event)"
+      autocomplete="off"
+      autocorrect="off"
+      spellcheck="false"
+      class="w-full bg-surface-container border border-outline-variant/30 text-white text-sm font-label pl-9 pr-10 py-2.5 rounded-sm focus:outline-none focus:border-primary/60 placeholder:text-on-surface-variant/40"
+    />
+    <kbd class="search-slash-hint" title="Press / to search" aria-hidden="true">/</kbd>
+    <div id="search-results" role="listbox" aria-label="Search suggestions" class="search-results-panel hidden"></div>
+  </div>
+  <div class="flex items-center gap-3 sm:gap-4 shrink-0">
+    <div class="hidden sm:flex items-center gap-4 pr-4 border-r border-outline-variant/30 text-[10px] font-label tracking-widest">
       <span class="text-on-surface-variant">Empty: <span id="hdr-empty" class="text-primary">--</span></span>
       <span class="text-on-surface-variant">Occupancy: <span id="hdr-occ" class="text-tertiary">--%</span></span>
       <span id="hdr-day" class="text-on-surface-variant/50"></span>
     </div>
-    <div class="flex items-center gap-4 pl-4 border-l border-outline-variant/30">
-      <div class="relative hidden sm:block">
-        <span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-on-surface-variant" style="font-size:16px">search</span>
-        <input
-          id="global-search"
-          type="text"
-          placeholder="Search room..."
-          oninput="globalSearch(this.value)"
-          autocomplete="off"
-          class="bg-surface-container border border-outline-variant/30 text-white text-xs font-label pl-8 pr-3 py-1.5 rounded-sm w-40 focus:outline-none focus:border-primary/60 placeholder:text-on-surface-variant/40"
-        />
-      </div>
-      <div id="hdr-clock" class="text-xs font-bold text-primary tabular-nums hidden sm:block">--:--:--</div>
-      <div id="hdr-countdown" class="text-[9px] font-label text-on-surface-variant tabular-nums md:hidden">↻ <span id="hdr-countdown-secs">60</span>s</div>
-      <div class="w-9 h-9 rounded-sm bg-surface-container border border-outline-variant/20 flex items-center justify-center">
-        <span class="material-symbols-outlined text-on-surface-variant">person</span>
-      </div>
+    <div id="hdr-clock" class="text-xs font-bold text-primary tabular-nums hidden md:block">--:--:--</div>
+    <div id="hdr-countdown" class="text-[9px] font-label text-on-surface-variant tabular-nums md:hidden">↻ <span id="hdr-countdown-secs">60</span>s</div>
+    <div class="hidden sm:flex w-9 h-9 rounded-sm bg-surface-container border border-outline-variant/20 items-center justify-center">
+      <span class="material-symbols-outlined text-on-surface-variant">person</span>
     </div>
   </div>
 </header>
@@ -846,23 +881,35 @@
   </button>
 </nav>
 
-<!-- Mobile search overlay -->
-<div id="mobile-search-overlay" role="dialog" aria-modal="true" aria-label="Search rooms"
+<!-- Mobile search overlay — opened from the always-visible header field or the Search tab -->
+<div id="mobile-search-overlay" role="dialog" aria-modal="true" aria-label="Search rooms and buildings"
      class="hidden fixed inset-0 z-[200] bg-[#080808]/95 backdrop-blur-md flex flex-col items-center pt-20 px-6 sm:hidden">
   <div class="w-full max-w-sm relative flex-shrink-0">
-    <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" style="font-size:20px">search</span>
+    <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none" style="font-size:20px">search</span>
     <input
       id="mobile-search-input"
       type="text"
       inputmode="search"
-      placeholder="Search room (e.g. KUPF 207)..."
-      oninput="globalSearch(this.value)"
+      role="combobox"
+      aria-autocomplete="list"
+      aria-expanded="false"
+      aria-controls="mobile-search-results"
+      aria-haspopup="listbox"
+      aria-keyshortcuts="/"
+      aria-label="Search rooms and buildings. Press slash to focus."
+      placeholder="Search rooms &amp; buildings"
+      oninput="onSearchInput(this.value, 'mobile-search-input')"
+      onfocus="onSearchFocus(this)"
+      onkeydown="onSearchKeydown(event)"
       autocomplete="off"
-      class="w-full bg-surface-container border border-outline-variant/30 text-white text-sm font-label pl-10 pr-4 py-3 rounded-sm focus:outline-none focus:border-primary/60 placeholder:text-on-surface-variant/40"
+      autocorrect="off"
+      spellcheck="false"
+      class="w-full bg-surface-container border border-outline-variant/30 text-white text-sm font-label pl-10 pr-10 py-3 rounded-sm focus:outline-none focus:border-primary/60 placeholder:text-on-surface-variant/40"
     />
+    <kbd class="search-slash-hint" title="Press / to search" aria-hidden="true">/</kbd>
   </div>
-  <!-- Live results, rendered inside the overlay so they are actually visible -->
-  <div id="mobile-search-results" class="w-full max-w-sm flex-1 overflow-y-auto mt-4 space-y-2 pb-6"
+  <div id="mobile-search-results" role="listbox" aria-label="Search suggestions"
+       class="w-full max-w-sm flex-1 overflow-y-auto mt-4 pb-6"
        style="scrollbar-width:thin;scrollbar-color:rgba(63,255,139,0.15) transparent"></div>
   <button onclick="toggleMobileSearch()"
           class="flex-shrink-0 mb-6 min-h-[44px] px-6 text-xs text-on-surface-variant font-label uppercase tracking-widest">Cancel</button>
