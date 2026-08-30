@@ -114,7 +114,7 @@ function syncURL() {
 function restoreStateFromURL() {
   const params = new URLSearchParams(window.location.search);
 
-  const view     = params.get('view');
+  let view       = params.get('view');
   const building = params.get('building');
   const at       = params.get('at');
   const forMins  = params.get('for');

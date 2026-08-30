@@ -69,11 +69,38 @@ def test_component_helpers_exist_and_use_tokens():
         "component helpers must use var(--token), not hardcoded hex"
 
 
-def test_all_shareable_view_values_are_still_handled():
-    """Shared links are an advertised feature; these four must keep working."""
+def _restore_state_body():
     js = open(APP_JS, encoding='utf-8').read()
     start = js.index('function restoreStateFromURL')
-    body = js[start:start + 2500]
+    return js[start:start + 2500]
+
+
+def test_all_shareable_view_values_are_still_handled():
+    """Shared links are an advertised feature; these four must keep working."""
+    body = _restore_state_body()
     for view in ('dashboard', 'rooms', 'map', 'settings'):
         assert f"'{view}'" in body, f"view={view} no longer handled"
     assert "'buildings'" in body, "view=buildings alias missing"
+
+
+def test_view_alias_variable_is_reassignable():
+    """The 'buildings' alias reassigns `view`, so `view` must not be a const.
+
+    This test exists because its predecessor did not catch a real crash. That
+    test only asserted the string 'buildings' appeared in the function body —
+    and it DID appear, on the very line that threw. `const view = ...` followed
+    by `view = 'dashboard'` raises TypeError, which aborts init() and leaves the
+    whole app dead on /?view=buildings, while the server still returns HTTP 200.
+    A guard rail that passes on broken code is not a guard rail.
+    """
+    body = _restore_state_body()
+
+    reassigns = re.search(r"^\s*if \(view === 'buildings'\) view = ", body, re.M)
+    assert reassigns, "the buildings->dashboard alias reassignment is missing"
+
+    decl = re.search(r"^\s*(const|let|var)\s+view\s*=", body, re.M)
+    assert decl, "could not find the declaration of `view` in restoreStateFromURL"
+    assert decl.group(1) != 'const', (
+        "`view` is declared with const but is reassigned by the 'buildings' "
+        "alias — this throws TypeError and kills init(). Use `let`."
+    )
