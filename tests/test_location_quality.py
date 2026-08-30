@@ -137,3 +137,34 @@ def test_position_with_no_timestamp_is_stale():
                          timeout=20)
     assert out.returncode == 0, out.stderr
     assert json.loads(out.stdout) == [True, True]
+
+
+def _run_distance(distances):
+    script = (_extract_const('WALKING_PATH_FACTOR') + '\n'
+              + _extract_const('WALKING_METERS_PER_SECOND') + '\n'
+              + _extract('formatDistance') + '\n') + (
+        'console.log(JSON.stringify('
+        + json.dumps(distances)
+        + '.map(d => formatDistance(d))));'
+    )
+    out = subprocess.run(['node', '-e', script], capture_output=True, text=True,
+                         timeout=20)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_distance_labels_allow_for_campus_walking_paths():
+    """The Haversine value is straight-line distance, not a walkable route.
+
+    Keep the nearby-building wording based on the direct distance, but apply
+    the campus path correction before printing outdoor metres, kilometres, or
+    walking time. This prevents a direct 800 m estimate from being presented
+    as an 800 m walk.
+    """
+    assert _run_distance([40, 100, 800, 1000, None]) == [
+        "you're in this building",
+        '130 m · 2 min walk',
+        '1.0 km away',
+        '1.3 km away',
+        '',
+    ]

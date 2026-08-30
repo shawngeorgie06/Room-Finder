@@ -2043,13 +2043,22 @@ function roomDistanceMeters(room) {
   return haversineMeters(state.userPos.lat, state.userPos.lon, c[0], c[1]);
 }
 
-// ~1.35 m/s average walking pace.
-function formatDistance(m) {
-  if (m === null) return '';
-  if (m < 50) return "you're in this building";
-  if (m >= 1000) return `${(m / 1000).toFixed(1)} km away`;
-  const mins = Math.max(1, Math.round(m / 1.35 / 60));
-  return `${Math.round(m)} m · ${mins} min walk`;
+// Haversine gives a straight-line distance. Campus paths, crossings and
+// building entrances make a walk about 30% longer on average; keep the
+// correction at the display boundary so the ranking remains stable while the
+// label describes the distance a person is likely to walk.
+const WALKING_PATH_FACTOR = 1.3;
+const WALKING_METERS_PER_SECOND = 1.35;
+
+function formatDistance(straightLineMeters) {
+  if (straightLineMeters === null || straightLineMeters === undefined) return '';
+  // A nearby fix is still useful for recognizing the building even though a
+  // path multiplier would push the building entrance over the cutoff.
+  if (straightLineMeters < 50) return "you're in this building";
+  const walkingMeters = straightLineMeters * WALKING_PATH_FACTOR;
+  if (walkingMeters >= 1000) return `${(walkingMeters / 1000).toFixed(1)} km away`;
+  const mins = Math.max(1, Math.round(walkingMeters / WALKING_METERS_PER_SECOND / 60));
+  return `${Math.round(walkingMeters)} m · ${mins} min walk`;
 }
 
 function setGeoStatus(msg, color) {
