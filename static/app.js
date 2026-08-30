@@ -419,7 +419,8 @@ async function fetchBuildings() {
     renderBuildingsControls(data);
     renderBuildingsGrid(data);
     if (state.map)     updateBuildingMarkers(state.map,     state.markers,     data);
-    if (state.dashMap) updateBuildingMarkers(state.dashMap, state.dashMarkers, data);
+    // Hero markers stay non-interactive on every refresh, not just at init.
+    if (state.dashMap) updateBuildingMarkers(state.dashMap, state.dashMarkers, data, { interactive: false });
     // Show no-classes banner if all buildings have 0 occupied rooms and no day override
     const totalOccupied = data.reduce((s, b) => s + b.occupied_rooms, 0);
     const isWeekendOrHoliday = !state.dayAt && totalOccupied === 0 && data.length > 0;
@@ -1295,7 +1296,11 @@ function makeTileLayers(map) {
   }).addTo(map);
 }
 
-function updateBuildingMarkers(map, markersObj, buildings) {
+// `interactive:false` is for the home hero, whose markers must not respond to
+// clicks: the hero is wrapped in a single button that opens the full Map, and
+// Leaflet does not stop native DOM propagation, so a clickable pin would open
+// the building panel AND bubble to the button, switching the view underneath.
+function updateBuildingMarkers(map, markersObj, buildings, { interactive = true } = {}) {
   Object.values(markersObj).forEach(({circle, label}) => {
     if (circle) map.removeLayer(circle);
     if (label)  map.removeLayer(label);
@@ -1308,7 +1313,8 @@ function updateBuildingMarkers(map, markersObj, buildings) {
     if (!coords) return;
     const color = occColor(b.occupancy_pct);
     const circle = L.circleMarker(coords, {
-      radius:18, fillColor:color, color:'#fff', weight:2, fillOpacity:0.65
+      radius:18, fillColor:color, color:'#fff', weight:2, fillOpacity:0.65,
+      interactive
     }).addTo(map);
     const label = L.marker(coords, {
       icon: L.divIcon({
@@ -1316,9 +1322,11 @@ function updateBuildingMarkers(map, markersObj, buildings) {
         className:'', iconSize:[70,32], iconAnchor:[35,16]
       }), interactive:false, zIndexOffset:1000
     }).addTo(map);
-    circle.on('click', () => openBuildingPanel(b));
-    circle.on('mouseover', function(){ this.setStyle({fillOpacity:0.85, radius:22}); });
-    circle.on('mouseout',  function(){ this.setStyle({fillOpacity:0.65, radius:18}); });
+    if (interactive) {
+      circle.on('click', () => openBuildingPanel(b));
+      circle.on('mouseover', function(){ this.setStyle({fillOpacity:0.85, radius:22}); });
+      circle.on('mouseout',  function(){ this.setStyle({fillOpacity:0.65, radius:18}); });
+    }
     markersObj[b.building] = {circle, label};
   });
 }
@@ -1355,7 +1363,7 @@ function initHomeHeroMap() {
   });
   makeTileLayers(state.dashMap);
   if (state.buildingsData.length) {
-    updateBuildingMarkers(state.dashMap, state.dashMarkers, state.buildingsData);
+    updateBuildingMarkers(state.dashMap, state.dashMarkers, state.buildingsData, { interactive: false });
   }
 }
 
