@@ -1386,9 +1386,6 @@ function openBuildingPanel(buildingData) {
 
   // CAB = library special case
   if (buildingData.building === 'CAB') {
-    const ft = $('floor-tabs'); if (ft) ft.innerHTML = '';
-    const fw = $('floor-tabs-wrap'); if (fw) fw.style.display = 'none';
-    const sw = $('panel-search-wrap'); if (sw) sw.style.display = 'none';
     const hw = $('panel-heatmap-wrap'); if (hw) hw.style.display = 'none';
     const fc = $('floor-rooms');
     if (fc) {
@@ -1404,25 +1401,18 @@ function openBuildingPanel(buildingData) {
   }
 
   // Restore sections
-  const fw = $('floor-tabs-wrap'); if (fw) fw.style.display = '';
-  const sw = $('panel-search-wrap'); if (sw) sw.style.display = '';
   const hw = $('panel-heatmap-wrap'); if (hw) hw.style.display = '';
-  if ($('panel-search')) $('panel-search').value = '';
   renderHeatmap(buildingData.building);
 
   // Loading state
   const fc = $('floor-rooms');
   if (fc) fc.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:48px 16px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em">Loading…</div>`;
-  const ft = $('floor-tabs'); if (ft) ft.innerHTML = '';
 
   fetch(`/api/rooms/all?building=${encodeURIComponent(buildingData.building)}`)
     .then(r => r.json())
     .then(rooms => {
       state.floorRoomsData = rooms;
-      const floors = [...new Set(rooms.map(r => r.floor))].sort((a,b) => a - b);
-      state.mapFloor = floors[0] ?? 1;
-      buildFloorTabs(floors, rooms);
-      renderRoomGrid(rooms, state.mapFloor);
+      renderRoomsByFloor(rooms);
     })
     .catch(() => {
       if (fc) fc.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:48px;color:#ff7166;font-size:11px">Error loading rooms.</div>`;
@@ -1468,77 +1458,59 @@ function renderHeatmap(building) {
     .catch(() => { wrap.innerHTML = ''; });
 }
 
-function buildFloorTabs(floors, rooms) {
-  const container = $('floor-tabs');
-  if (!container) return;
-  container.innerHTML = '';
-  floors.forEach(f => {
-    const freeCount = rooms.filter(r => r.floor === f && r.empty).length;
-    const isActive  = f === state.mapFloor;
-    const label     = f === 0 ? 'GRD' : `FL ${f}`;
-    const btn = document.createElement('button');
-    btn.dataset.floor = f;
-    btn.innerHTML = `<span style="display:block">${label}</span><span style="display:block;font-size:8px;opacity:0.65;margin-top:1px">${freeCount} free</span>`;
-    btn.style.cssText = `padding:6px 11px;font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:700;border-radius:2px;text-transform:uppercase;letter-spacing:0.08em;cursor:pointer;transition:all 0.15s;text-align:center;line-height:1.2;border:1px solid ${isActive ? '#3fff8b' : 'rgba(72,72,71,0.4)'};background:${isActive ? 'rgba(63,255,139,0.12)' : 'transparent'};color:${isActive ? '#3fff8b' : '#adaaaa'}`;
-    btn.addEventListener('click', () => {
-      state.mapFloor = f;
-      if ($('panel-search')) $('panel-search').value = '';
-      document.querySelectorAll('#floor-tabs button').forEach(b => {
-        b.style.border = '1px solid rgba(72,72,71,0.4)';
-        b.style.background = 'transparent';
-        b.style.color = '#adaaaa';
-      });
-      btn.style.border = '1px solid #3fff8b';
-      btn.style.background = 'rgba(63,255,139,0.12)';
-      btn.style.color = '#3fff8b';
-      renderRoomGrid(state.floorRoomsData, f);
-    });
-    container.appendChild(btn);
-  });
-}
-
-function filterFloorRooms(query) {
-  renderRoomGrid(state.floorRoomsData, state.mapFloor, query);
-}
-
-function renderRoomGrid(rooms, floor, query = '') {
-  let list = rooms
-    .filter(r => r.floor === floor)
-    .sort((a, b) => a.room.localeCompare(b.room, undefined, {numeric: true}));
-  if (query) list = list.filter(r => r.room.toLowerCase().includes(query.toLowerCase()));
-
+// Rooms grouped by floor. In-use rooms stay visible but dimmed — hiding them
+// leaves a suspiciously short list with no sense of the building's size.
+function renderRoomsByFloor(rooms) {
   const container = $('floor-rooms');
   if (!container) return;
-  container.innerHTML = '';
+  container.textContent = '';
 
-  const freeCount = list.filter(r => r.empty).length;
-  setText('floor-room-count', query ? `${list.length} match${list.length !== 1 ? 'es' : ''}` : `${freeCount} / ${list.length} free`);
-
-  if (!list.length) {
-    container.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:48px 16px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em">${query ? 'No rooms match.' : 'No rooms on this floor.'}</div>`;
-    return;
-  }
-
+  const floors = [...new Set(rooms.map(r => r.floor))].sort((a, b) => a - b);
   const frag = document.createDocumentFragment();
-  list.forEach(room => {
-    const isSoon = room.empty && room.minutes_until_next !== null && room.minutes_until_next <= state.soonThresholdMins;
-    const color  = !room.empty ? '#ff7166' : isSoon ? '#f59e0b' : '#3fff8b';
-    const status = !room.empty ? 'In Use'
-                 : room.minutes_until_next === null ? 'Free all day'
-                 : `${room.minutes_until_next}m free`;
-    const cell = document.createElement('div');
-    cell.className = 'interactive';
-    cell.style.cssText = `background:${color}0d;border:1px solid ${color}30;border-top:2px solid ${color};padding:10px 9px 9px;border-radius:2px;transition:all 0.15s;cursor:pointer;min-height:44px`;
-    cell.title = `${room.room} · tap for schedule`;
-    makeActivatable(cell, `Room ${room.room}, ${status}. Open schedule.`,
-                    () => openRoomDetail(room.building, room.room));
-    cell.onmouseover = () => { cell.style.background = `${color}1a`; cell.style.transform = 'translateY(-1px)'; };
-    cell.onmouseout  = () => { cell.style.background = `${color}0d`; cell.style.transform = ''; };
-    cell.innerHTML = `
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:800;color:#fff;letter-spacing:0.03em;line-height:1;margin-bottom:5px">${room.room}</div>
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:600;color:${color};text-transform:uppercase;letter-spacing:0.08em">${status}</div>`;
-    frag.appendChild(cell);
+
+  floors.forEach(floor => {
+    const onFloor = rooms.filter(r => r.floor === floor);
+    const freeCount = onFloor.filter(r => r.empty !== false).length;
+
+    const head = document.createElement('div');
+    head.style.cssText = 'grid-column:1/-1;display:flex;align-items:center;gap:10px;margin-top:8px';
+    head.appendChild(groupLabel(floor === 0 ? 'Ground floor' : `Floor ${floor}`));
+    const rule = document.createElement('span');
+    rule.style.cssText = 'flex:1;height:1px;background:var(--hairline-soft)';
+    head.appendChild(rule);
+    const cnt = document.createElement('span');
+    cnt.className = 'label';
+    cnt.style.cssText = 'color:var(--free)';
+    cnt.textContent = `${freeCount} free`;
+    head.appendChild(cnt);
+    frag.appendChild(head);
+
+    onFloor.forEach(room => {
+      const st = roomStatus(room);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('aria-label',
+        `Room ${room.room}, ${st.text}. Open schedule.`);
+      const tone = st.kind === 'busy'
+        ? 'opacity:0.5;border-color:var(--hairline-soft);background:var(--surface)'
+        : st.kind === 'soon'
+          ? 'border-color:rgba(245,158,11,0.32);background:rgba(245,158,11,0.06)'
+          : 'border-color:rgba(63,255,139,0.3);background:rgba(63,255,139,0.06)';
+      btn.style.cssText = 'display:flex;flex-direction:column;justify-content:center;gap:3px;' +
+        'min-height:54px;padding:9px 10px;border-radius:6px;border:1px solid;cursor:pointer;' +
+        'text-align:left;' + tone;
+      btn.addEventListener('click', () => openRoomDetail(room.building, room.room));
+
+      const num = document.createElement('div');
+      num.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:700;" +
+        'font-variant-numeric:tabular-nums;line-height:1;color:var(--text)';
+      num.textContent = room.room;
+      btn.appendChild(num);
+      btn.appendChild(statusPill(room));
+      frag.appendChild(btn);
+    });
   });
+
   container.appendChild(frag);
 }
 
