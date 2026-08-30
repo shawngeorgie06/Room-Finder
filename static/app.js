@@ -336,6 +336,53 @@ function renderBuildingsGrid(buildings) {
 
 
 
+function toggleHideFull() {
+  state.hideFullBuildings = !state.hideFullBuildings;
+  renderBuildingsControls(state.buildingsData);
+  renderBuildingsGrid(state.buildingsData);
+  const n = state.buildingsData.filter(b => b.empty_rooms > 0).length;
+  announce(state.hideFullBuildings
+    ? `Showing ${n} buildings with free rooms.`
+    : `Showing all ${state.buildingsData.length} buildings.`);
+}
+
+function renderBuildingsControls(buildings) {
+  const container = $('buildings-controls');
+  if (!container) return;
+  container.textContent = '';
+
+  const on = state.hideFullBuildings;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'label';
+  btn.setAttribute('role', 'switch');
+  btn.setAttribute('aria-checked', on ? 'true' : 'false');
+  btn.style.cssText = 'display:flex;align-items:center;gap:8px;min-height:44px;padding:8px 14px;' +
+    'border-radius:9999px;cursor:pointer;' +
+    (on ? 'color:var(--free);background:rgba(63,255,139,0.09);border:1px solid rgba(63,255,139,0.28)'
+        : 'color:var(--muted);background:transparent;border:1px solid var(--hairline-soft)');
+  btn.textContent = 'Hide full';
+  btn.addEventListener('click', toggleHideFull);
+
+  const track = document.createElement('span');
+  track.setAttribute('aria-hidden', 'true');
+  track.style.cssText = 'width:22px;height:12px;border-radius:9999px;position:relative;flex:none;' +
+    (on ? 'background:rgba(63,255,139,0.32)' : 'background:rgba(255,255,255,0.12)');
+  const knob = document.createElement('span');
+  knob.style.cssText = 'position:absolute;top:1.5px;width:9px;height:9px;border-radius:9999px;' +
+    (on ? 'right:1.5px;background:var(--free)' : 'left:1.5px;background:var(--faint)');
+  track.appendChild(knob);
+  btn.appendChild(track);
+  container.appendChild(btn);
+
+  const count = document.createElement('span');
+  count.className = 'label';
+  count.style.cssText = 'color:var(--faint);white-space:nowrap';
+  const shown = on ? buildings.filter(b => b.empty_rooms > 0).length : buildings.length;
+  count.textContent = `${shown} shown`;
+  container.appendChild(count);
+}
+
 // ── Fetch data ─────────────────────────────────────────────────────────────
 async function fetchBuildings() {
   try {
@@ -351,6 +398,7 @@ async function fetchBuildings() {
     updateStats(data);
     updateHomeHeroStat(data);
     renderBuildingChips(data);
+    renderBuildingsControls(data);
     renderBuildingsGrid(data);
     if (state.map)     updateBuildingMarkers(state.map,     state.markers,     data);
     if (state.dashMap) updateBuildingMarkers(state.dashMap, state.dashMarkers, data);
