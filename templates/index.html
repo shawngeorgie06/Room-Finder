@@ -218,7 +218,7 @@
     </a>
     <a id="nav-saved" href="#" onclick="switchView('rooms');return false;"
        class="text-on-surface-variant/60 px-4 py-3 flex items-center gap-3 hover:bg-surface-container hover:text-white transition-all font-headline text-sm tracking-tight rounded-sm">
-      <span class="material-symbols-outlined text-xl">star</span><span>Saved</span>
+      <span class="material-symbols-outlined text-xl">meeting_room</span><span>Rooms</span>
     </a>
   </nav>
   <!-- Sidebar top rooms -->
@@ -621,7 +621,7 @@
         <div id="panel-building" class="text-2xl font-headline font-black text-white leading-none">--</div>
       </div>
     </div>
-    <button onclick="closeFloorPanel()" class="w-9 h-9 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
+    <button onclick="closeFloorPanel()" aria-label="Close building panel" class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
       <span class="material-symbols-outlined text-xl">close</span>
     </button>
   </div>
@@ -686,11 +686,15 @@
     </div>
     <div class="flex items-center gap-3">
       <div id="rds-status" class="px-3 py-1 rounded-sm text-label font-bold font-label tracking-wider uppercase"></div>
+      <button id="rds-pin" onclick="toggleDetailPin()" title="Pin this room" aria-pressed="false"
+              class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-all rounded-sm">
+        <span id="rds-pin-icon" class="material-symbols-outlined text-lg">star</span>
+      </button>
       <button onclick="copyRoomLink()" title="Copy link to this room"
-              class="w-9 h-9 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-all rounded-sm">
+              class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-all rounded-sm">
         <span id="rds-share-icon" class="material-symbols-outlined text-lg">link</span>
       </button>
-      <button onclick="closeRoomDetail()" class="w-9 h-9 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
+      <button onclick="closeRoomDetail()" aria-label="Close room detail" class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
@@ -735,7 +739,7 @@
         <div class="text-label text-primary font-label tracking-[0.25em] uppercase mb-0.5">Right Now · Best Available</div>
         <div class="text-xl font-headline font-black text-white">Find Me a Room</div>
       </div>
-      <button onclick="closeFindRoom()" class="w-9 h-9 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
+      <button onclick="closeFindRoom()" aria-label="Close find a room" class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
@@ -806,10 +810,10 @@
     <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">map</span>
     <span class="label" style="color:#adaaaa">Map</span>
   </button>
-  <button id="mob-nav-saved" type="button" onclick="switchView('rooms')" aria-label="Saved rooms"
+  <button id="mob-nav-saved" type="button" onclick="switchView('rooms')" aria-label="All rooms"
           class="flex-1 flex flex-col items-center justify-center gap-0.5 py-2">
-    <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">star</span>
-    <span class="label" style="color:#adaaaa">Saved</span>
+    <span class="material-symbols-outlined" style="font-size:20px;color:#adaaaa">meeting_room</span>
+    <span class="label" style="color:#adaaaa">Rooms</span>
   </button>
 </nav>
 

@@ -1693,6 +1693,32 @@ function minToTime(min) {
 }
 
 // ── Room Detail Sheet ────────────────────────────────────────────────────────
+// The pin control on the detail sheet is the only way to pin a room from the
+// Home -> building -> room path; the room-grid cards are the other entry point.
+function renderDetailPin() {
+  const btn = $('rds-pin');
+  const icon = $('rds-pin-icon');
+  if (!btn || !icon || !state.detailRoom) return;
+  const [b, r] = splitDetailRoom(state.detailRoom);
+  const on = isPinned(b, r);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.title = on ? 'Unpin this room' : 'Pin this room';
+  icon.textContent = on ? 'star' : 'star_outline';
+  icon.style.color = on ? 'var(--free)' : '';
+}
+
+function splitDetailRoom(key) {
+  const i = key.indexOf('-');
+  return [key.slice(0, i), key.slice(i + 1)];
+}
+
+function toggleDetailPin() {
+  if (!state.detailRoom) return;
+  const [b, r] = splitDetailRoom(state.detailRoom);
+  togglePin(b, r);
+  renderDetailPin();
+}
+
 function openRoomDetail(building, room) {
   const sheet    = $('room-detail-sheet');
   const backdrop = $('room-detail-backdrop');
@@ -1700,6 +1726,7 @@ function openRoomDetail(building, room) {
 
   state.detailRoom = `${building}-${room}`;
   syncURL();
+  renderDetailPin();
 
   setText('rds-building', `${building} · Room Detail`);
   setText('rds-room', room);
