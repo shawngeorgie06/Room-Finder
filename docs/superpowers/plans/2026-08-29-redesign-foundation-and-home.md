@@ -455,8 +455,13 @@ def test_component_helpers_exist_and_use_tokens():
     for fn in ('function roomStatus', 'function statusPill', 'function groupLabel'):
         assert fn in js, f"missing helper: {fn}"
 
-    start = js.index('function roomStatus')
-    end = js.index('// ── Global search')
+    # Slice on the helpers section's OWN sentinels. An earlier draft ended the
+    # slice at the unrelated '// ── Global search' header, which tempted an
+    # implementer to move that header rather than fix the test — reshaping the
+    # source to fit the assertion. Both markers now belong to this section, so
+    # unrelated code cannot drift into the slice.
+    start = js.index('// ── Component helpers')
+    end = js.index('// ── End component helpers')
     helpers = js[start:end]
     assert 'var(--free)' in helpers
     assert 'var(--soon)' in helpers
@@ -511,7 +516,13 @@ function groupLabel(text) {
   el.textContent = text;
   return el;
 }
+
+// ── End component helpers ─────────────────────────────────────────────────
 ```
+
+Do NOT move any pre-existing section header to accommodate the test. The
+sentinels above are the test's boundaries; unrelated markers stay where they
+are.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
