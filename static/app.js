@@ -1543,12 +1543,15 @@ function filterFloorRooms(query) {
   const floorsWithVisibleRoom = new Set();
   container.querySelectorAll('button[data-room]').forEach(btn => {
     const match = !q || btn.dataset.room.toLowerCase().includes(q);
-    btn.style.display = match ? '' : 'none';
+    // Restore 'flex' explicitly: these buttons carry an inline display:flex
+    // from renderRoomsByFloor, and setting display='' REMOVES that declaration
+    // rather than restoring it, which would blockify every matching tile.
+    btn.style.display = match ? 'flex' : 'none';
     if (match) floorsWithVisibleRoom.add(btn.dataset.floor);
   });
 
   container.querySelectorAll('[data-floor-head]').forEach(head => {
-    head.style.display = floorsWithVisibleRoom.has(head.dataset.floorHead) ? '' : 'none';
+    head.style.display = floorsWithVisibleRoom.has(head.dataset.floorHead) ? 'flex' : 'none';
   });
 }
 
