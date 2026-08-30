@@ -454,7 +454,7 @@ function setBuildingsGeoStatus(msg, color) {
 // so granting permission on either surface benefits the other.
 async function setBuildingSort(mode) {
   if (mode === 'distance') {
-    if (!state.userPos) {
+    if (!state.userPos || isPositionStale(state.userPos, Date.now())) {
       setBuildingsGeoStatus('Getting your location…');
       try {
         await requestLocation();
@@ -2052,6 +2052,16 @@ function locationQuality(accuracyMeters) {
   return { tier: 'unusable', message: `Location only accurate to ±${Math.round(a)} m, which is too coarse to rank by distance on this campus.` };
 }
 
+// A cached fix goes stale as the user walks. Campus is 465 m end to end, and
+// at ~1.35 m/s a two-minute-old position can already be ~160 m wrong — about
+// the median gap between buildings, i.e. enough to invert the ranking.
+const POSITION_MAX_AGE_MS = 120000;
+
+function isPositionStale(pos, nowMs) {
+  if (!pos || !Number.isFinite(pos.at)) return true;
+  return (nowMs - pos.at) > POSITION_MAX_AGE_MS;
+}
+
 function requestLocation() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error('unsupported'));
@@ -2063,6 +2073,9 @@ function requestLocation() {
           // Kept so callers can judge whether a ranking is honest. Previously
           // discarded, which made a +/-8 m fix and a +/-90 m fix look identical.
           accuracy: pos.coords.accuracy,
+          // Captured so a fix cached earlier in the session cannot be reused
+          // indefinitely after the user has walked somewhere else.
+          at: Date.now(),
         };
         resolve(state.userPos);
       },
@@ -2085,7 +2098,7 @@ function _updateSortButtons() {
 
 async function setFindRoomSort(mode) {
   if (mode === 'distance') {
-    if (!state.userPos) {
+    if (!state.userPos || isPositionStale(state.userPos, Date.now())) {
       setGeoStatus('Getting your location…', '#767575');
       try {
         await requestLocation();
@@ -2105,7 +2118,7 @@ async function setFindRoomSort(mode) {
     // ranking — fall back rather than present noise as an answer.
     const q = locationQuality(state.userPos.accuracy);
     if (q.tier === 'unusable') {
-      setGeoStatus(q.message + ' Sorting by free time instead.', '#f59e0b');
+      setGeoStatus(q.message + ' Sorting by free time instead.', 'var(--soon)');
       state.frSort = 'time';
       _updateSortButtons();
       renderFindRoom(state.frLastRooms);
@@ -2115,7 +2128,7 @@ async function setFindRoomSort(mode) {
     // Off campus, distance ranking is meaningless.
     const far = haversineMeters(state.userPos.lat, state.userPos.lon, 40.7424, -74.1779) > 3000;
     if (far) setGeoStatus("You look far from campus — distances are from NJIT's Newark campus.", '#f59e0b');
-    else if (q.tier === 'coarse') setGeoStatus(q.message, '#f59e0b');
+    else if (q.tier === 'coarse') setGeoStatus(q.message, 'var(--soon)');
     else setGeoStatus('');
   }
   state.frSort = mode;
@@ -2250,7 +2263,10 @@ function renderFindRoom(rooms) {
     row.onmouseout  = () => { row.style.background = 'rgba(63,255,139,0.03)'; };
     makeActivatable(row, `${buildingName(room.building)} room ${room.room}, ${formatTime(room.minutes_until_next)} free. Open schedule.`,
                     () => { closeFindRoom(); openRoomDetail(room.building, room.room); });
-    const dist = roomDistanceMeters(room);
+    // Same gate as the buildings grid: a fix too coarse to rank with is too
+    // coarse to print "304 m - 4 min walk" from.
+    const usable = state.userPos && locationQuality(state.userPos.accuracy).tier !== 'unusable';
+    const dist = usable ? roomDistanceMeters(room) : null;
     const distLabel = dist !== null
       ? `<div style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:#6e9bff;margin-top:3px">${formatDistance(dist)}</div>`
       : '';

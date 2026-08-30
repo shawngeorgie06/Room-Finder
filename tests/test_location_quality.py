@@ -35,6 +35,18 @@ def _extract(fn_name):
     raise AssertionError(f'unbalanced braces extracting {fn_name}')
 
 
+def _extract_const(name):
+    """Pull a top-level `const NAME = ...;` line out of app.js.
+
+    Extracted functions may close over module-level constants, which would be
+    undefined once the function is evaluated in isolation.
+    """
+    src = open(APP_JS, encoding='utf-8').read()
+    m = re.search(rf'^const {re.escape(name)}\s*=.*?;', src, re.M | re.S)
+    assert m, f'could not find const {name}'
+    return m.group(0)
+
+
 def _run(accuracies):
     script = _extract('locationQuality') + '\n' + (
         'console.log(JSON.stringify('
@@ -83,3 +95,45 @@ def test_tiers_carry_a_human_message_except_when_good():
     assert good['message'] == ''
     assert '90' in coarse['message'], 'coarse tier should quote the actual figure'
     assert coarse['message'] and unusable['message']
+
+
+def _run_stale(cases):
+    """cases: list of [capturedAtMs, nowMs] -> list of bool"""
+    script = (_extract_const('POSITION_MAX_AGE_MS') + '\n'
+              + _extract('isPositionStale') + '\n') + (
+        'console.log(JSON.stringify('
+        + json.dumps(cases)
+        + '.map(c => isPositionStale({at: c[0]}, c[1]))));'
+    )
+    out = subprocess.run(['node', '-e', script], capture_output=True, text=True,
+                         timeout=20)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_fresh_position_is_not_stale():
+    now = 1_000_000
+    assert _run_stale([[now, now], [now - 30_000, now]]) == [False, False]
+
+
+def test_position_older_than_two_minutes_is_stale():
+    """A fix taken at the campus entrance is worthless once you have walked
+    across campus. 465 m end to end at ~1.35 m/s is under six minutes, so a
+    two-minute-old fix can already be ~160 m wrong — comparable to the median
+    gap between buildings."""
+    now = 1_000_000
+    assert _run_stale([[now - 120_001, now], [now - 600_000, now]]) == [True, True]
+
+
+def test_position_with_no_timestamp_is_stale():
+    script = (_extract_const('POSITION_MAX_AGE_MS') + '\n'
+              + _extract('isPositionStale') + '\n') + (
+        "console.log(JSON.stringify(["
+        "isPositionStale(null, 1000), "
+        "isPositionStale({}, 1000)"
+        "]));"
+    )
+    out = subprocess.run(['node', '-e', script], capture_output=True, text=True,
+                         timeout=20)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == [True, True]
