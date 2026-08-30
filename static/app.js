@@ -263,7 +263,6 @@ async function fetchBuildings() {
     const data = await r.json();
     state.buildingsData = data;
     updateStats(data);
-    renderHealthBars(data);
     renderBuildingChips(data);
     renderDashBuildingFilter(data);
     if (state.map)     updateBuildingMarkers(state.map,     state.markers,     data);
@@ -361,9 +360,6 @@ function updateStats(buildings) {
   setText('health-sections', (totalRooms * 3).toLocaleString());
   setText('health-bldg', buildings.length);
   setText('health-occ', occ + '%');
-  const bar = $('health-bar');
-  if (bar) bar.style.width = occ + '%';
-  setText('health-bar-label', `Schedule coverage ${occ}%`);
 }
 
 
@@ -411,7 +407,6 @@ function applyThreshold() {
   if (sel) state.soonThresholdMins = parseInt(sel.value) || 30;
   // Re-render with existing data (no new fetch needed — threshold is display-only)
   if (state.allRoomsData.length)    renderLiveFeed(state.allRoomsData);
-  if (state.buildingsData.length)   renderHealthBars(state.buildingsData);
   // Re-fetch rooms so renderRoomsGrid and renderDashRooms get fresh calls
   fetchRooms();
   syncURL();
@@ -1031,23 +1026,6 @@ function renderSidebarTopRooms(rooms) {
       </div>
       <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:${color};white-space:nowrap">${formatTime(room.minutes_until_next)}</span>`;
     container.appendChild(btn);
-  });
-}
-
-function renderHealthBars(buildings) {
-  const container = $('building-bars');
-  if (!container) return;
-  container.textContent = '';
-  const maxTotal = Math.max(...buildings.map(b => b.total_rooms), 1);
-  buildings.slice(0, 14).forEach(b => {
-    const bar = document.createElement('div');
-    const h = Math.max(8, Math.round((b.total_rooms / maxTotal) * 80));
-    const color = occColor(b.occupancy_pct);
-    bar.style.cssText = `flex:1;background:${color}33;height:${h}px;min-height:8px;border-radius:2px;transition:all 0.3s;cursor:pointer`;
-    bar.title = `${b.building}: ${b.occupancy_pct}% occupied`;
-    bar.addEventListener('mouseover', () => { bar.style.background = color + '88'; });
-    bar.addEventListener('mouseout',  () => { bar.style.background = color + '33'; });
-    container.appendChild(bar);
   });
 }
 
