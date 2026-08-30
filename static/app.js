@@ -1393,6 +1393,7 @@ function openBuildingPanel(buildingData) {
 
   // CAB = library special case
   if (buildingData.building === 'CAB') {
+    const sw = $('panel-search-wrap'); if (sw) sw.style.display = 'none';
     const hw = $('panel-heatmap-wrap'); if (hw) hw.style.display = 'none';
     const fc = $('floor-rooms');
     if (fc) {
@@ -1408,14 +1409,19 @@ function openBuildingPanel(buildingData) {
   }
 
   // Restore sections
+  const sw = $('panel-search-wrap'); if (sw) sw.style.display = '';
   const hw = $('panel-heatmap-wrap'); if (hw) hw.style.display = '';
+  if ($('panel-search')) $('panel-search').value = '';
   renderHeatmap(buildingData.building);
 
   // Loading state
   const fc = $('floor-rooms');
   if (fc) fc.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:48px 16px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em">Loading…</div>`;
 
-  fetch(`/api/rooms/all?building=${encodeURIComponent(buildingData.building)}`)
+  const params = filterParams();
+  params.set('building', buildingData.building);
+
+  fetch('/api/rooms/all?' + params.toString())
     .then(r => r.json())
     .then(rooms => {
       state.floorRoomsData = rooms;
@@ -1480,6 +1486,7 @@ function renderRoomsByFloor(rooms) {
     const freeCount = onFloor.filter(r => r.empty !== false).length;
 
     const head = document.createElement('div');
+    head.dataset.floorHead = floor;
     head.style.cssText = 'grid-column:1/-1;display:flex;align-items:center;gap:10px;margin-top:8px';
     head.appendChild(groupLabel(floor === 0 ? 'Ground floor' : `Floor ${floor}`));
     const rule = document.createElement('span');
@@ -1496,6 +1503,8 @@ function renderRoomsByFloor(rooms) {
       const st = roomStatus(room);
       const btn = document.createElement('button');
       btn.type = 'button';
+      btn.dataset.room = room.room;
+      btn.dataset.floor = floor;
       btn.setAttribute('aria-label',
         `Room ${room.room}, ${st.text}. Open schedule.`);
       const tone = st.kind === 'busy'
@@ -1519,6 +1528,28 @@ function renderRoomsByFloor(rooms) {
   });
 
   container.appendChild(frag);
+}
+
+// Whole-building room search. Filters room buttons across every floor
+// section and hides any floor header whose rooms are all filtered out —
+// otherwise the user is left staring at an empty "Floor 2 — 4 free" header.
+// The free counts themselves always describe the full floor, not the
+// filtered subset, so they never appear to change while typing.
+function filterFloorRooms(query) {
+  const container = $('floor-rooms');
+  if (!container) return;
+  const q = query.trim().toLowerCase();
+
+  const floorsWithVisibleRoom = new Set();
+  container.querySelectorAll('button[data-room]').forEach(btn => {
+    const match = !q || btn.dataset.room.toLowerCase().includes(q);
+    btn.style.display = match ? '' : 'none';
+    if (match) floorsWithVisibleRoom.add(btn.dataset.floor);
+  });
+
+  container.querySelectorAll('[data-floor-head]').forEach(head => {
+    head.style.display = floorsWithVisibleRoom.has(head.dataset.floorHead) ? '' : 'none';
+  });
 }
 
 // ── Settings ───────────────────────────────────────────────────────────────

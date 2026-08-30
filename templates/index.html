@@ -640,6 +640,13 @@
       <div class="text-[8px] text-on-surface-variant font-label tracking-widest uppercase mt-0.5">Total</div>
     </div>
   </div>
+  <!-- Search -->
+  <div id="panel-search-wrap" class="px-4 py-2.5 border-b border-primary/10 flex-shrink-0">
+    <div class="flex items-center gap-2 bg-white/5 border border-white/10 rounded-sm px-3 py-1.5 focus-within:border-primary/40 transition-colors">
+      <span class="material-symbols-outlined text-sm text-outline">search</span>
+      <input id="panel-search" type="text" placeholder="Search room number…" class="bg-transparent border-none text-xs font-label text-white placeholder:text-outline focus:ring-0 w-full" oninput="filterFloorRooms(this.value)"/>
+    </div>
+  </div>
   <!-- Room grid -->
   <div class="flex-1 overflow-y-auto p-4" style="scrollbar-width:thin;scrollbar-color:rgba(63,255,139,0.15) transparent">
     <div id="floor-rooms" class="grid grid-cols-3 gap-2.5"></div>
