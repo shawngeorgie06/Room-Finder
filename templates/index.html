@@ -313,37 +313,23 @@
         </div>
       </div>
 
-      <!-- Page Header -->
-      <div class="flex flex-col xl:flex-row xl:items-end justify-between gap-6 border-b border-outline-variant/10 pb-6">
-        <div>
-          <div class="flex items-center gap-3 mb-1">
-            <span class="px-2 py-0.5 bg-primary/20 text-primary text-label font-bold border border-primary/30 tracking-[0.2em]">LIVE</span>
-            <span id="dash-semester" class="text-on-surface-variant font-label text-xs uppercase tracking-[0.1em]">Auto-refresh 60s</span>
-          </div>
-          <h1 class="text-3xl sm:text-5xl font-headline font-extrabold tracking-tighter text-white">Campus Overview</h1>
-          <button onclick="openFindRoom()"
-                  class="mt-3 inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-on-primary font-headline font-bold text-sm rounded-sm hover:brightness-110 transition-all shadow-[0_0_20px_rgba(63,255,139,0.25)]">
-            <span class="material-symbols-outlined text-base">search</span>
-            Find Me a Room
-          </button>
-        </div>
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div class="px-5 py-3 bg-surface-container/40 border-l-2 border-outline-variant/40 rounded-sm min-w-0">
-            <div class="text-label text-on-surface-variant font-label tracking-widest uppercase mb-1">Total Rooms</div>
-            <div id="stat-total" class="text-2xl font-headline font-bold text-white leading-none">--</div>
-          </div>
-          <div class="px-5 py-3 bg-surface-container/40 border-l-2 border-primary rounded-sm min-w-0">
-            <div class="text-label text-on-surface-variant font-label tracking-widest uppercase mb-1">Empty Now</div>
-            <div id="stat-empty" class="text-2xl font-headline font-bold text-primary leading-none">--</div>
-          </div>
-          <div class="px-5 py-3 bg-surface-container/40 border-l-2 border-tertiary rounded-sm min-w-0">
-            <div class="text-label text-on-surface-variant font-label tracking-widest uppercase mb-1">Occupancy</div>
-            <div id="stat-occ" class="text-2xl font-headline font-bold text-tertiary leading-none">--%</div>
-          </div>
-          <div class="px-5 py-3 bg-surface-container/40 border-l-2 border-outline-variant/40 rounded-sm min-w-0">
-            <div class="text-label text-on-surface-variant font-label tracking-widest uppercase mb-1">Buildings</div>
-            <div id="stat-bldg" class="text-2xl font-headline font-bold text-on-surface-variant leading-none">--</div>
-          </div>
+      <!-- Action + a single quiet stat line. The old page header carried a
+           "Campus Overview" title and four stat cards here; on a phone that
+           was a full screen of campus trivia between the map and the answer,
+           and on desktop the numbers already repeat in the top bar. All four
+           stat ids are kept so updateStats() needs no special case. -->
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2">
+        <button onclick="openFindRoom()"
+                class="inline-flex items-center justify-center gap-2 px-5 py-3 bg-primary text-on-primary font-headline font-bold text-sm rounded-lg hover:brightness-110 transition-all shadow-[0_0_20px_rgba(63,255,139,0.25)]">
+          <span class="material-symbols-outlined text-base">search</span>
+          Find Me a Room
+        </button>
+        <div class="text-label font-label text-on-surface-variant tracking-widest">
+          <span id="stat-empty" class="text-primary">--</span> free of
+          <span id="stat-total">--</span> rooms &middot;
+          <span id="stat-bldg">--</span> buildings &middot;
+          <span id="stat-occ" class="text-tertiary">--%</span> occupied &middot;
+          <span id="dash-semester">Auto-refresh 60s</span>
         </div>
       </div>
 
