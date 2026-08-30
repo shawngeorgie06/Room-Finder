@@ -1828,7 +1828,14 @@ function openRoomDetail(building, room) {
   if (backdrop) backdrop.classList.remove('hidden');
   sheet.style.transform = 'translateY(0)';
 
-  fetch(`/api/room/schedule?building=${encodeURIComponent(building)}&room=${encodeURIComponent(room)}`)
+  // Forward the day/time override, as every other fetch does. Without it the
+  // sheet showed today's schedule while the panel behind it showed the
+  // filtered day.
+  const rdParams = filterParams();
+  rdParams.set('building', building);
+  rdParams.set('room', room);
+
+  fetch('/api/room/schedule?' + rdParams.toString())
     .then(r => r.json())
     .then(data => renderRoomDetail(data))
     .catch(() => {

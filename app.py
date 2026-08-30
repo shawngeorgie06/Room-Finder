@@ -458,7 +458,14 @@ def create_app(schedule=None):
         if at_time:
             now = at_time
 
-        # Allow weekday override for testing only
+        # Named day override, same param the rest of the frontend uses. Without
+        # this the room detail sheet silently showed today while the buildings
+        # list and building panel honoured the filter.
+        day_override = parse_day_param(request.args.get("day"))
+        if day_override is not None:
+            weekday = day_override
+
+        # Numeric escape hatch, kept for existing tests and callers.
         _wd = request.args.get("_weekday")
         if _wd is not None:
             try:
