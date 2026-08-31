@@ -6,7 +6,7 @@
  *   the last-known room data when offline.
  * Map tiles are third-party and intentionally not cached — offline the map
  * renders its markers over an empty basemap. */
-const CACHE_VERSION = 'room-finder-v10';
+const CACHE_VERSION = 'room-finder-v13';
 const PRECACHE = [
   '/',
   '/static/tailwind.css',

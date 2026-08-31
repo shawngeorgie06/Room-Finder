@@ -113,8 +113,15 @@ def test_saved_rooms_filter_has_markup_state_and_shareable_url_support():
     assert 'savedOnly: false' in js
     assert "params.set('saved', '1')" in js
     assert "params.get('saved')" in js
-    assert 'function setSavedOnly(enabled)' in js
-    assert "rooms.filter(room => isPinned(room.building, room.room))" in js
+    assert 'function setSavedOnly(enabled)' in js  # async- prefix allowed
+    # Saved mode must read the every-room cache, not the free-rooms feed:
+    # /api/rooms omits occupied rooms, so a saved room would disappear the
+    # moment a class started in it.
+    assert "searchRoomSource()" in js
+    saved_block = js[js.index('const visibleRooms = state.savedOnly'):]
+    saved_block = saved_block[:saved_block.index(': rooms;')]
+    assert 'searchRoomSource()' in saved_block
+    assert 'isPinned(room.building, room.room)' in saved_block
     assert 'id="rooms-all-btn"' in html
     assert 'id="saved-rooms-btn"' in html
     assert 'No saved rooms yet' in js

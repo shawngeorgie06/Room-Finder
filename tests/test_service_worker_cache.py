@@ -21,8 +21,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SW = os.path.join(ROOT, 'static', 'sw.js')
 
 # Update together, never separately.
-EXPECTED_VERSION = 'room-finder-v10'
-EXPECTED_DIGEST = 'd9e688c24429a879'
+EXPECTED_VERSION = 'room-finder-v13'
+EXPECTED_DIGEST = 'af4ff4e7a3844c35'
 
 
 def _sw_source():

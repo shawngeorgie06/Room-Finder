@@ -73,10 +73,12 @@ def _preamble():
     """Every piece of app.js the status logic depends on, in dependency order."""
     return '\n'.join([
         _extract_const('STATUS_HEX'),
+        _extract_const('STATUS_BORDER'),
         _extract('isClosingSoon'),
         _extract('formatTime'),
         _extract('roomStatus'),
         _extract('roomStatusMeta'),
+        _extract('roomCardStatus'),
     ])
 
 
@@ -208,3 +210,44 @@ def test_status_hex_literals_are_not_retyped_at_call_sites():
         # varying alpha; what must not reappear is a bare status swap.
         assert f"isSoon ? '{literal}'" not in body
         assert f": '{literal}'\n" not in body
+
+
+def test_room_card_shows_occupied_rooms_dimmed_rather_than_blank():
+    """The Saved filter is the only path that feeds a busy room to the card.
+
+    Before this existed the card had no busy branch at all: it would have
+    drawn an occupied room in free-green with a time remaining. These pin the
+    three presentations apart.
+    """
+    assert _run('roomCardStatus(room).label') == [
+        'IN USE', 'IN USE', 'OPEN', 'CLOSING', 'CLOSING', 'CLOSING', 'OPEN',
+        'OPEN', 'OPEN', 'CLOSING',
+    ]
+    assert _run('roomCardStatus(room).opacity') == [
+        0.55, 0.55, 1, 1, 1, 1, 1, 1, 1, 1,
+    ]
+
+
+def test_occupied_room_card_prints_no_time_remaining():
+    """"~10M free" on a room someone is teaching in is a lie, and the busy
+    cases carry exactly the minutes that would produce one."""
+    assert _run('roomCardStatus(room).timeText') == [
+        '', '', 'FREE ALL DAY', '~0M', '~29M', '~30M', '~31M', '1H', '1H 35M',
+        '~5M',
+    ]
+
+
+def test_room_card_borders_come_from_one_table():
+    assert _run('roomCardStatus(room).border') == [
+        'rgba(255,113,102,0.18)', 'rgba(255,113,102,0.18)',
+        'rgba(63,255,139,0.1)', 'rgba(245,158,11,0.2)', 'rgba(245,158,11,0.2)',
+        'rgba(245,158,11,0.2)', 'rgba(63,255,139,0.1)', 'rgba(63,255,139,0.1)',
+        'rgba(63,255,139,0.1)', 'rgba(245,158,11,0.2)',
+    ]
+
+
+def test_screen_reader_text_does_not_promise_free_minutes_on_a_busy_room():
+    assert _run('roomCardStatus(room).statusWord') == [
+        'in use', 'in use', 'open', 'closing soon', 'closing soon',
+        'closing soon', 'open', 'open', 'open', 'closing soon',
+    ]

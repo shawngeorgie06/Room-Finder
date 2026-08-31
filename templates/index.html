@@ -86,6 +86,11 @@
   .kinetic-popup .leaflet-popup-close-button:hover { color: #fff !important; }
   .room-card-in { animation: card-in 0.3s ease both; }
   @keyframes card-in { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+  /* Occupied rooms reach the grid only through the Saved filter, where they
+     are dimmed rather than hidden. !important is load-bearing: card-in has
+     fill-mode `both` and ends at opacity:1, and an animation's final value
+     beats an inline style, so a normal declaration here would do nothing. */
+  .room-card-busy { opacity: 0.55 !important; }
 
   /* Visible keyboard focus. Inputs use focus:outline-none with only a border
      tint, which is not perceivable enough to navigate by. */
@@ -140,6 +145,7 @@
   @media (prefers-reduced-motion: reduce) {
     .scanline { animation: none; }
     .room-card-in { animation: none; }
+    .room-card-busy { opacity: 0.55 !important; }
     * { transition-duration: 0.01ms !important; }
   }
 </style>
@@ -356,7 +362,7 @@
       <div class="flex items-center justify-between mb-6 border-b border-outline-variant/10 pb-4">
         <div>
           <div id="rooms-view-semester" class="text-label text-primary font-label tracking-widest uppercase mb-1">LIVE</div>
-          <h2 class="text-3xl font-headline font-extrabold tracking-tighter text-white">AVAILABLE ROOMS</h2>
+          <h2 id="rooms-heading" class="text-3xl font-headline font-extrabold tracking-tighter text-white">AVAILABLE ROOMS</h2>
         </div>
         <span id="grid-count" class="text-label text-on-surface-variant font-label tracking-widest uppercase"></span>
         <span id="grid-timestamp" class="text-label text-on-surface-variant/40 font-label ml-3"></span>

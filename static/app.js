@@ -579,6 +579,8 @@ async function fetchRooms() {
     // Free all day filter
     if (state.freeAllDay) data = data.filter(r => r.minutes_until_next === null);
     state.lastRoomsData = data;
+    // A ?saved=1 deep link renders before any click has warmed the cache.
+    if (state.savedOnly) await fetchAllRoomsCache();
     renderRoomsGrid(data);
     renderSidebarTopRooms(data);
     const t = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
@@ -870,6 +872,32 @@ function buildSearchModel(rawQuery) {
 // that assemble inline style strings by hand. Kept beside its only consumers
 // rather than in the component-helpers region, which is deliberately hex-free.
 const STATUS_HEX = { free: '#3fff8b', soon: '#f59e0b', busy: '#ff7166' };
+
+// Everything the Rooms-view card needs to draw one room, derived from the
+// single status source. Busy rooms only reach the card via the Saved filter —
+// the free-rooms feed never returns them — and they are dimmed and shown
+// rather than hidden, so a saved room that filled up still appears.
+const STATUS_BORDER = {
+  free: 'rgba(63,255,139,0.1)',
+  soon: 'rgba(245,158,11,0.2)',
+  busy: 'rgba(255,113,102,0.18)',
+};
+
+function roomCardStatus(room) {
+  const st = roomStatusMeta(room);
+  const busy = st.kind === 'busy';
+  return {
+    kind: st.kind,
+    color: st.color,
+    border: STATUS_BORDER[st.kind],
+    // The pill reads OPEN / CLOSING / IN USE; the right-hand figure is the
+    // time remaining, which is meaningless for a room that is occupied.
+    label: busy ? 'IN USE' : st.kind === 'soon' ? 'CLOSING' : 'OPEN',
+    timeText: busy ? '' : formatTime(room.minutes_until_next),
+    statusWord: busy ? 'in use' : st.kind === 'soon' ? 'closing soon' : 'open',
+    opacity: busy ? 0.55 : 1,
+  };
+}
 
 // Adapter over roomStatus() for those same call sites. The uppercase busy
 // label is deliberate and load-bearing — search results render it as-is.
@@ -1286,8 +1314,19 @@ function renderRoomsGrid(rooms) {
   const container = $('rooms-container');
   if (!container) return;
   updateSavedFilterButtons();
+  // "Available Rooms" is a false heading over a list that includes occupied
+  // saved rooms, and the building chips count free rooms, which says nothing
+  // about a handful of saved ones.
+  setText('rooms-heading', state.savedOnly ? 'SAVED ROOMS' : 'AVAILABLE ROOMS');
+  const _chips = $('building-filter');
+  if (_chips) _chips.style.display = state.savedOnly ? 'none' : 'flex';
+  // The free-rooms feed cannot answer "show me my saved rooms" — it omits any
+  // room that is currently occupied, so a saved room would vanish the moment
+  // a class started in it. Saved mode reads the every-room cache instead.
   const visibleRooms = state.savedOnly
-    ? rooms.filter(room => isPinned(room.building, room.room))
+    ? searchRoomSource()
+        .filter(room => isPinned(room.building, room.room))
+        .filter(room => !state.building || room.building === state.building)
     : rooms;
   const noun = state.savedOnly ? 'saved room' : 'room';
   setText('grid-count', `${visibleRooms.length} ${noun}${visibleRooms.length === 1 ? '' : 's'}${state.savedOnly ? '' : ' available'}`);
@@ -1325,19 +1364,21 @@ function renderRoomsGrid(rooms) {
 
   const frag = document.createDocumentFragment();
   pinSort(visibleRooms).forEach((room, i) => {
-    const isSoon = isClosingSoon(room);
-    const color = isSoon ? STATUS_HEX.soon : STATUS_HEX.free;
-    const border = isSoon ? 'rgba(245,158,11,0.2)' : 'rgba(63,255,139,0.1)';
+    const cs = roomCardStatus(room);
+    const color = cs.color;
+    const border = cs.border;
     const pinned = isPinned(room.building, room.room);
     const card = document.createElement('div');
-    card.className = 'room-card-in interactive';
+    card.className = 'room-card-in interactive' + (cs.opacity < 1 ? ' room-card-busy' : '');
     card.style.cssText = `background:linear-gradient(135deg,rgba(26,25,25,0.8),rgba(14,14,14,0.95));border:1px solid ${border};padding:14px;border-radius:2px;position:relative;overflow:hidden;transition:border-color 0.2s,background 0.2s;cursor:pointer;animation-delay:${Math.min(i,30)*22}ms`;
     card.title = `${room.building}-${room.room} · tap for schedule`;
-    const statusWord = isSoon ? 'closing soon' : 'open';
+
     makeActivatable(
       card,
-      `${buildingName(room.building)} room ${room.room}, ${statusWord}, ${
-        room.minutes_until_next === null ? 'free all day' : room.minutes_until_next + ' minutes free'
+      `${buildingName(room.building)} room ${room.room}, ${cs.statusWord}${
+        cs.kind === 'busy' ? '' :
+        room.minutes_until_next === null ? ', free all day'
+                                         : `, ${room.minutes_until_next} minutes free`
       }. Open schedule.`,
       () => openRoomDetail(room.building, room.room)
     );
@@ -1368,9 +1409,9 @@ function renderRoomsGrid(rooms) {
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div style="display:flex;align-items:center;gap:5px">
           <span style="width:6px;height:6px;border-radius:50%;background:${color};display:inline-block;animation:pulse 2s infinite"></span>
-          <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.1em">${isSoon?'CLOSING':'OPEN'}</span>
+          <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.1em">${cs.label}</span>
         </div>
-        <span style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:800;color:${color};letter-spacing:0.02em">${formatTime(room.minutes_until_next)}</span>
+        <span style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:800;color:${color};letter-spacing:0.02em">${cs.timeText}</span>
       </div>`;
     frag.appendChild(card);
   });
@@ -1816,9 +1857,12 @@ function updateSavedFilterButtons() {
   }
 }
 
-function setSavedOnly(enabled) {
+async function setSavedOnly(enabled) {
   state.savedOnly = enabled;
   updateSavedFilterButtons();
+  // Populate the every-room cache before rendering, or the first click on
+  // Saved shows the empty state for a moment even when rooms are saved.
+  if (enabled) await fetchAllRoomsCache();
   renderRoomsGrid(state.lastRoomsData);
   syncURL();
   announce(enabled ? 'Showing saved rooms.' : 'Showing all available rooms.');
