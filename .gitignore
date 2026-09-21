@@ -20,6 +20,10 @@ node_modules/
 # Logs — may contain local paths / stack traces
 *.log
 
+# Local visitor analytics database (contains pseudonymous usage data)
+instance/
+*.sqlite3
+
 # Uploaded schedules (written at runtime by /api/upload-schedule, one per term)
 uploaded_schedule*
 

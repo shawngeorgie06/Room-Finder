@@ -174,3 +174,17 @@ The app uses gunicorn as the WSGI server. `render.yaml` or manual setup:
 - **Build command**: `pip install -r requirements.txt`
 - **Start command**: `gunicorn app:app`
 - **Environment**: `UPLOAD_PASSWORD=yourpassword` (optional — restricts schedule uploads)
+
+### Private visitor report
+
+Set `ADMIN_PASSWORD` and open `/admin/visits`. Your browser will ask for a
+username and password; the username can be anything and the password is the
+value of `ADMIN_PASSWORD`. The report records each app page-open, its Eastern
+date/time, a random browser ID, a one-way hash of the network address, browser
+details, and referrer. It does not identify a person's real name because the
+app has no sign-in system. Records older than 90 days are automatically removed.
+
+By default the SQLite file is `instance/visits.sqlite3`. Render's filesystem is
+ephemeral, so attach a persistent disk and set `VISIT_DB_PATH` to a path on that
+disk if the history must survive deploys/restarts. Set a stable random
+`VISITOR_LOG_SALT` as well so network hashes remain comparable across deploys.

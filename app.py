@@ -1,11 +1,16 @@
 import os
+import hmac
+import sqlite3
 import threading
 import time
 import urllib.request
+import uuid
+from functools import wraps
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from schedule import load_schedule, get_empty_rooms
+from visitor_log import get_visits, record_visit
 
 
 def _start_keepalive():
@@ -277,9 +282,26 @@ BANNER_ORIGIN = 'https://generalssb-prod.ec.njit.edu'
 UPLOAD_ENDPOINT = '/api/upload-schedule'
 
 
-def create_app(schedule=None):
+def create_app(schedule=None, visit_db_path=None):
     app = Flask(__name__)
     app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_BYTES
+    app.config['VISIT_DB_PATH'] = visit_db_path or os.environ.get(
+        'VISIT_DB_PATH', os.path.join(app.instance_path, 'visits.sqlite3')
+    )
+
+    def _admin_required(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            required = os.environ.get('ADMIN_PASSWORD', '').strip()
+            auth = request.authorization
+            if not required:
+                return jsonify({'error': 'Visitor report is disabled. Set ADMIN_PASSWORD.'}), 503
+            if not auth or not hmac.compare_digest(auth.password or '', required):
+                return ('Admin password required.', 401, {
+                    'WWW-Authenticate': 'Basic realm="Room Finder visitor report"'
+                })
+            return view(*args, **kwargs)
+        return wrapped
 
     # Schedule metadata tracked alongside the mutable list.
     # NOTE: uploads mutate this in-process list, which only stays consistent
@@ -341,7 +363,36 @@ def create_app(schedule=None):
 
     @app.route("/")
     def index():
-        return render_template("index.html")
+        visitor_id = request.cookies.get('room_finder_visitor') or uuid.uuid4().hex
+        forwarded = request.headers.get('X-Forwarded-For', '')
+        ip_address = forwarded.split(',', 1)[0].strip() if forwarded else (request.remote_addr or '')
+        salt = os.environ.get('VISITOR_LOG_SALT') or os.environ.get('ADMIN_PASSWORD') or 'local-development'
+        try:
+            record_visit(
+                app.config['VISIT_DB_PATH'], visitor_id, ip_address,
+                request.headers.get('User-Agent', ''),
+                request.headers.get('Referer', ''), salt,
+            )
+        except sqlite3.Error:
+            app.logger.exception('Could not record visitor')
+        response = app.make_response(render_template("index.html"))
+        response.set_cookie(
+            'room_finder_visitor', visitor_id, max_age=60 * 60 * 24 * 365,
+            secure=request.is_secure, httponly=True, samesite='Lax'
+        )
+        return response
+
+    @app.route('/admin/visits')
+    @_admin_required
+    def visitor_report():
+        visits, summary = get_visits(app.config['VISIT_DB_PATH'])
+        for visit in visits:
+            parsed = datetime.fromisoformat(visit['visited_at'])
+            visit['local_time'] = parsed.astimezone(EASTERN).strftime('%a, %b %-d, %Y · %-I:%M:%S %p')
+        response = app.make_response(render_template('visits.html', visits=visits, summary=summary))
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+        return response
 
     @app.route("/sw.js")
     def service_worker():

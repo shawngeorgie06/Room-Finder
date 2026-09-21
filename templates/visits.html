@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Visitor Log · NJIT Room Finder</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; padding: 2rem; background: #080808; color: #eee; }
+    main { max-width: 1200px; margin: auto; }
+    h1 { color: #3fff8b; margin-bottom: .25rem; }
+    .muted { color: #aaa; }
+    .cards { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1.5rem 0; }
+    .card { min-width: 150px; padding: 1rem; background: #171717; border: 1px solid #333; }
+    .number { display: block; color: #3fff8b; font-size: 1.8rem; font-weight: 700; }
+    .table-wrap { overflow-x: auto; border: 1px solid #333; }
+    table { width: 100%; border-collapse: collapse; font-size: .875rem; }
+    th, td { padding: .7rem; border-bottom: 1px solid #292929; text-align: left; vertical-align: top; }
+    th { color: #3fff8b; background: #151515; position: sticky; top: 0; }
+    code { color: #ddd; }
+    @media (max-width: 600px) { body { padding: 1rem; } }
+  </style>
+</head>
+<body><main>
+  <h1>Visitor Log</h1>
+  <div class="muted">Times shown in America/New_York. Data is retained for 90 days.</div>
+  <div class="cards">
+    <div class="card"><span class="number">{{ summary.visits }}</span>page opens</div>
+    <div class="card"><span class="number">{{ summary.visitors }}</span>unique browsers</div>
+    <div class="card"><span class="number">{{ summary.visitors_today }}</span>visitors today</div>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Date and time</th><th>Visitor</th><th>Network</th><th>Browser / device</th><th>Referrer</th></tr></thead>
+    <tbody>
+    {% for visit in visits %}
+      <tr>
+        <td>{{ visit.local_time }}</td>
+        <td><code>{{ visit.visitor_id[:8] }}</code></td>
+        <td><code>{{ visit.ip_hash }}</code></td>
+        <td>{{ visit.user_agent or 'Unknown' }}</td>
+        <td>{{ visit.referrer or 'Direct' }}</td>
+      </tr>
+    {% else %}<tr><td colspan="5">No visits recorded yet.</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+</main></body></html>
