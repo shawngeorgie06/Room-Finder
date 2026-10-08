@@ -105,7 +105,7 @@ def test_room_status_kinds():
 
 def test_room_status_text():
     assert _run('roomStatus(room).text') == [
-        'In use', 'In use', 'FREE ALL DAY', '~0M', '~29M', '~30M', '~31M',
+        'In use', 'In use', 'No more scheduled classes', '~0M', '~29M', '~30M', '~31M',
         '1H', '1H 35M', '~5M',
     ]
 
@@ -125,7 +125,7 @@ def test_room_status_meta_text_is_uppercase_for_busy():
     site renders uppercase. Consolidation must keep this difference.
     """
     assert _run('roomStatusMeta(room).text') == [
-        'IN USE', 'IN USE', 'FREE ALL DAY', '~0M', '~29M', '~30M', '~31M',
+        'IN USE', 'IN USE', 'No more scheduled classes', '~0M', '~29M', '~30M', '~31M',
         '1H', '1H 35M', '~5M',
     ]
 
@@ -156,14 +156,8 @@ def test_threshold_is_honoured_by_both_implementations():
     ]
 
 
-def test_undefined_minutes_is_treated_as_free_all_day_not_soon():
-    """`undefined <= 30` is false, so undefined already lands on free.
-
-    roomStatus() guards undefined explicitly; roomStatusMeta() only guards
-    null and relies on the comparison. Both reach 'free', and a consolidation
-    that swapped the guard for a truthiness check would break the 0-minute
-    case above instead. Pinned here so the equivalence is deliberate.
-    """
+def test_missing_minutes_does_not_claim_no_more_classes():
+    """Absent timing facts are unknown, unlike the explicit null API fact."""
     script = '\n'.join([
         _preamble(),
         'const state = { soonThresholdMins: 30 };',
@@ -174,7 +168,7 @@ def test_undefined_minutes_is_treated_as_free_all_day_not_soon():
     out = subprocess.run(['node', '-e', script], capture_output=True, text=True,
                          timeout=20)
     assert out.returncode == 0, out.stderr
-    assert json.loads(out.stdout) == ['free', '#3fff8b', 'FREE ALL DAY']
+    assert json.loads(out.stdout) == ['free', '#3fff8b', 'Availability unknown']
 
 
 def test_the_soon_comparison_is_written_exactly_once():
@@ -232,7 +226,7 @@ def test_occupied_room_card_prints_no_time_remaining():
     """"~10M free" on a room someone is teaching in is a lie, and the busy
     cases carry exactly the minutes that would produce one."""
     assert _run('roomCardStatus(room).timeText') == [
-        '', '', 'FREE ALL DAY', '~0M', '~29M', '~30M', '~31M', '1H', '1H 35M',
+        '', '', 'No more scheduled classes', '~0M', '~29M', '~30M', '~31M', '1H', '1H 35M',
         '~5M',
     ]
 

@@ -1,16 +1,25 @@
 import os
 import hmac
+import hashlib
+import json
+import re
+import math
 import sqlite3
 import threading
 import time
 import urllib.request
-import uuid
 from functools import wraps
-from datetime import datetime, date
+from datetime import datetime, date, time as time_of_day
 from zoneinfo import ZoneInfo
-from flask import Flask, jsonify, render_template, request, send_from_directory
-from schedule import load_schedule, get_empty_rooms
-from visitor_log import get_visits, record_visit
+from flask import Flask, g, jsonify, render_template, request, send_from_directory
+from werkzeug.middleware.proxy_fix import ProxyFix
+from dataclasses import dataclass, replace
+from types import MappingProxyType
+from pathlib import Path
+from schedule import load_schedule, ScheduleValidationError, get_availability_facts, get_room_availability
+from schedule_store import ScheduleStore, StoredSchedule, published_records, utc_now
+from campus_metadata import load_registry
+from visitor_log import get_visits, normalize_visitor_id, record_visit
 
 
 def _start_keepalive():
@@ -59,7 +68,7 @@ def parse_day_param(day_str):
 def _term_code_from_filename(filename):
     """Return e.g. 202610 from 'Course_Schedule_202610.csv', or None."""
     import re
-    m = re.search(r'(\d{4})(\d{2})', filename or '')
+    m = re.search(r'(?<![0-9])([1-9][0-9]{3})(10|30|50|90)(?![0-9])', filename or '')
     return int(m.group(1) + m.group(2)) if m else None
 
 
@@ -123,22 +132,19 @@ def _in_session(term_code, today):
 
 
 def _term_from_entries(entries):
-    """Most common term code in the loaded data (e.g. 202610), or None."""
-    from collections import Counter
-    counts = Counter(
-        e.get('term', '') for e in entries
-        if str(e.get('term', '')).strip().isdigit()
-    )
-    if not counts:
-        return None
-    return int(counts.most_common(1)[0][0])
+    """Single validated data term, or unknown; never choose a mixed-term majority."""
+    terms = {str(e.get('term', '')).strip() for e in entries}
+    if len(terms) > 1:
+        raise ValueError('Mixed terms; export a single semester')
+    term = next(iter(terms), '')
+    return int(term) if term else None
 
 
-def _default_schedule_candidates(folder, today=None):
-    """Schedule files to try, best first. Ordering: legacy un-termed uploads,
-    then term-dated files by closeness to the current semester (exact match,
-    nearest future, newest past — per-term uploads beat bundled exports),
-    then the bundled default. The loader takes the first non-empty one."""
+def _default_schedule_candidates(folder, today=None, *, include_published=True):
+    """Termed candidates first (current, nearest future, newest past), then
+    legacy termless fallback. Published uploads shadow legacy same-term files.
+    Historical files are never deleted or rewritten by discovery.
+    """
     if today is None:
         today = datetime.now(EASTERN).date()
     expected = _expected_term(today)
@@ -167,43 +173,173 @@ def _default_schedule_candidates(folder, today=None):
             return (1, term, is_export)   # future: nearest first
         return (2, -term, is_export)      # past: newest first
 
-    candidates += [name for name, _ in sorted(dated, key=closeness)]
+    published = _published_or_empty(folder) if include_published else {}
+    for name, record in published.items():
+        if record.term:
+            dated.append((name, record.term))
+        elif name not in candidates:
+            candidates.append(name)
+    candidates = list(dict.fromkeys([name for name, _ in sorted(dated, key=closeness)] + candidates))
 
     if os.path.exists(os.path.join(folder, 'schedule_default.csv')):
         candidates.append('schedule_default.csv')
     return candidates
 
 
-def _stored_term_files(folder):
-    """Map of term_code -> (filename, source) for term files on disk.
-    Runtime uploads shadow bundled repo exports for the same term."""
-    import glob
+# Single-process coordination includes startup, publication, and rollover. The
+# deployment remains one worker; this does not pretend to be a distributed lock.
+_schedule_lock = threading.RLock()
+_candidate_failures = {}
+# Cache validation identities, not entire historical rosters. Catalog/export
+# requests must not repeatedly parse/hash unchanged historical schedules.
+_candidate_validations = {}
+
+
+def _storage_folder():
+    return os.path.abspath(os.environ.get('SCHEDULE_STORAGE_DIR') or UPLOAD_FOLDER)
+
+
+def _published_or_empty(folder):
+    """Only a missing manifest is empty; unreadable provenance is an error."""
+    return published_records(folder)
+
+
+def _file_signature(path):
+    try:
+        stat = os.stat(path)
+        return (os.path.abspath(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return (os.path.abspath(path), None, None)
+
+
+def _record_key(record):
+    return (record.path,) if record.imported_at is not None else _file_signature(record.path)
+
+
+def _remember_failure(record):
+    if len(_candidate_failures) >= 512:
+        _candidate_failures.pop(next(iter(_candidate_failures)))
+    _candidate_failures[os.path.abspath(record.path)] = _file_signature(record.path)
+
+
+def _all_schedule_candidates(folder=None, replacement=None, *, tolerate_manifest_errors=False):
+    folder = folder or _storage_folder()
+    roots = list(dict.fromkeys((os.path.abspath(folder), os.path.abspath(UPLOAD_FOLDER))))
+    expected = _expected_term(datetime.now(EASTERN).date())
+    candidates = []
+    for root in roots:
+        try:
+            published = _published_or_empty(root)
+            names = _default_schedule_candidates(root)
+        except (OSError, ValueError):
+            if not tolerate_manifest_errors:
+                raise
+            # Startup has no trusted live state; only explicit legacy files
+            # remain discoverable. Never adopt unreferenced managed payloads.
+            published = {}
+            names = _default_schedule_candidates(root, include_published=False)
+        for name in names:
+            record = published.get(name) or StoredSchedule(name, os.path.join(root, name), _term_code_from_filename(name))
+            # A new manifest record replaces all managed revisions for its term.
+            if replacement and record.imported_at and record.term == replacement.term:
+                continue
+            candidates.append(record)
+    if replacement:
+        candidates.insert(0, replacement)
+
+    def rank(record):
+        term = record.term
+        source = 0 if record.imported_at else (1 if record.filename.startswith('uploaded_') else 2)
+        if term == expected:
+            return (0, 0, source)
+        if term is not None and term > expected:
+            return (1, term, source)
+        if term is not None:
+            return (2, -term, source)
+        return (3, 0, source)
+    return sorted(candidates, key=rank)
+
+
+def _load_candidate(record):
+    signature = _file_signature(record.path)
+    if _candidate_failures.get(signature[0]) == signature:
+        return None
+    try:
+        entries = load_schedule(record.path)
+        if not entries:
+            raise ValueError('No scheduled entries')
+        term = _term_from_entries(entries)
+        if record.term is not None and term is not None and record.term != term:
+            raise ValueError('Data term differs from stored filename/manifest')
+        version = _schedule_version(entries)
+        if record.version is not None and version != record.version:
+            raise ValueError('Published schedule content differs from provenance')
+        if len(_candidate_validations) >= 512:
+            _candidate_validations.pop(next(iter(_candidate_validations)))
+        _candidate_validations[(record, signature)] = True
+        return entries, replace(record, version=version)
+    except Exception:
+        _remember_failure(record)
+        return None
+
+
+def _stored_term_files(folder, active=None):
+    """Validated original-format downloads, preferring the actual active source.
+
+    An unreadable manifest cannot revoke trusted live provenance, but no other
+    managed payload is discoverable without a readable publication record.
+    """
     out = {}
-    for pattern, source in (('Course_Schedule_*', 'bundled'),
-                            ('uploaded_schedule_*', 'uploaded')):
-        for ext in ('.csv', '.xlsx'):
-            for p in glob.glob(os.path.join(folder, pattern + ext)):
-                name = os.path.basename(p)
-                term = _term_code_from_filename(name)
-                if term:
-                    out[term] = (name, source)
+    if active is not None and active.term is not None and active.record_key:
+        path = active.record_key[0]
+        if active.imported_at is not None or _file_signature(path) == active.record_key:
+            source = 'uploaded' if active.filename.startswith('uploaded_') else 'bundled'
+            out[active.term] = (path, source)
+    for record in _all_schedule_candidates(folder, tolerate_manifest_errors=True):
+        if record.term is None or record.term in out:
+            continue
+        identity = (record, _file_signature(record.path))
+        if identity not in _candidate_validations and _load_candidate(record) is None:
+            continue
+        source = 'uploaded' if record.filename.startswith('uploaded_') else 'bundled'
+        out[record.term] = (record.path, source)
     return out
 
 
 def _load_best_schedule():
-    """Load the first usable schedule candidate from UPLOAD_FOLDER.
-    Returns (entries, filename); ([], '') when nothing usable exists."""
-    for candidate in _default_schedule_candidates(UPLOAD_FOLDER):
-        try:
-            entries = load_schedule(os.path.join(UPLOAD_FOLDER, candidate))
-        except Exception as e:
-            print(f"Skipping '{candidate}': {e}")
-            continue
-        if not entries:
-            print(f"Skipping '{candidate}': no valid schedule entries.")
-            continue
-        return entries, candidate
+    """Load once at startup, retaining failed-candidate stat memo for requests."""
+    for record in _all_schedule_candidates(tolerate_manifest_errors=True):
+        loaded = _load_candidate(record)
+        if loaded is not None:
+            return loaded
     return [], ''
+
+
+@dataclass(frozen=True)
+class ScheduleSnapshot:
+    entries: tuple
+    version: str
+    filename: str
+    term: int | None
+    activated_at: str
+    imported_at: str | None
+    source_filename: str | None
+    source_exported_at: str | None
+    record_key: tuple | None
+
+
+def _make_snapshot(entries, record=None):
+    # Freeze both outer roster and nested days; never retain caller-owned dicts.
+    frozen = tuple(MappingProxyType({**entry, 'days': tuple(entry['days'])}) for entry in entries)
+    if isinstance(record, str):  # compatibility for injected loader test seams
+        record = StoredSchedule(record, os.path.join(_storage_folder(), record), _term_code_from_filename(record)) if record else None
+    return ScheduleSnapshot(
+        frozen, record.version if record and record.version else _schedule_version(frozen),
+        record.filename if record else '',
+        _term_from_entries(frozen) or (record.term if record else None), utc_now(),
+        record.imported_at if record else None, record.source_filename if record else None,
+        record.source_exported_at if record else None, _record_key(record) if record else None,
+    )
 
 def get_current_time():
     """Returns (weekday_int, time_object) in Eastern time."""
@@ -222,41 +358,40 @@ def parse_at_param(at_str):
 
 
 def _compute_next_free_window(classes_out, now_min):
-    """
-    Given a sorted list of class dicts (each with start_min, end_min, time_start, time_end)
-    and the current time in minutes, return the next free window as
-    {'start': 'HH:MM AM/PM', 'end': 'HH:MM AM/PM', 'duration_mins': int}
-    or None if free for the rest of the day.
+    """Legacy null-or-complete finite window, using the shared interval model.
 
-    A free window is a gap between consecutive classes, or the gap from now
-    until the first class (if room is currently free before class starts).
+    None means no finite next window, NOT that the room is currently free.
+    The additive numeric facts distinguish the final occupied class from a
+    currently free room with no more scheduled classes.
     """
+    classes = [
+        {'time_start': time_of_day(*divmod(c['start_min'], 60)),
+         'time_end': time_of_day(*divmod(c['end_min'], 60))}
+        for c in classes_out
+    ]
+    facts = get_availability_facts(classes, time_of_day(*divmod(now_min, 60)))
+    start, end = facts['available_from_min'], facts['available_until_min']
+    if end is None:
+        return None
+
     def mins_to_str(m):
         h, mn = divmod(m, 60)
         period = 'AM' if h < 12 else 'PM'
-        h12 = h % 12 or 12
-        return f"{h12}:{mn:02d} {period}"
+        return f"{h % 12 or 12}:{mn:02d} {period}"
 
-    if not classes_out:
-        # No classes today — free all day, no specific window
-        return None
+    return {'start': mins_to_str(start), 'end': mins_to_str(end), 'duration_mins': end - start}
 
-    # Case 1: before any class starts — free from now until first class
-    first_start = classes_out[0]['start_min']
-    if now_min < first_start:
-        dur = first_start - now_min
-        return {'start': mins_to_str(now_min), 'end': mins_to_str(first_start), 'duration_mins': dur}
 
-    # Case 2: first real gap (back-to-back classes produce zero-width gaps — skip them)
-    for i in range(len(classes_out) - 1):
-        gap_start = classes_out[i]['end_min']
-        gap_end   = classes_out[i + 1]['start_min']
-        if gap_start >= now_min and gap_end > gap_start:
-            dur = gap_end - gap_start
-            return {'start': mins_to_str(gap_start), 'end': mins_to_str(gap_end), 'duration_mins': dur}
-
-    # Case 3: after all classes — free rest of day
-    return None
+def _schedule_version(entries):
+    """Stable content identity for loaded and injected schedules, independent of row order."""
+    records = [json.dumps({
+        **entry,
+        'days': sorted(entry['days']),
+        'time_start': entry['time_start'].isoformat(),
+        'time_end': entry['time_end'].isoformat(),
+    }, sort_keys=True, separators=(',', ':')) for entry in entries]
+    content = '[' + ','.join(sorted(records)) + ']'
+    return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
 def resolve_query_context():
@@ -269,8 +404,8 @@ def resolve_query_context():
     day_override = parse_day_param(request.args.get("day"))
     if day_override is not None:
         weekday = day_override
-    for_mins = request.args.get("for", default=0, type=int) or 0
-    return weekday, now, for_mins
+    for_mins = max(0, request.args.get("for", default=0, type=int) or 0)
+    return weekday, now.replace(second=0, microsecond=0), for_mins
 
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # schedule exports are ~2 MB; 10 MB is generous
@@ -280,82 +415,230 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # schedule exports are ~2 MB; 10 MB is gene
 # the upload endpoint and only for the Banner origin.
 BANNER_ORIGIN = 'https://generalssb-prod.ec.njit.edu'
 UPLOAD_ENDPOINT = '/api/upload-schedule'
+PROTECTED_ENDPOINTS = {UPLOAD_ENDPOINT, '/api/export-schedule', '/admin/visits'}
 
 
-def create_app(schedule=None, visit_db_path=None):
+class _ProtectedRateLimiter:
+    """Single-worker, thread-safe bad-response classification, not guess prevention.
+
+    After 20 presented-but-wrong credentials per peer or 200 total per 60-second
+    window, failures return 429. At most 200 peer entries are retained. Anonymous
+    probes and valid credentials never consume this budget; valid credentials
+    still work during throttling so a proxy-wide failure cannot lock out admins.
+    Every presented secret is compared even after the budget is exhausted: this
+    is NOT brute-force prevention. Deployment requires separate secrets of at
+    least 32 random printable-ASCII characters plus edge abuse protection.
+    State resets on restart; multiple workers/replicas require shared state.
+    Identity is REMOTE_ADDR, adjusted only by explicitly configured ProxyFix.
+    """
+
+    def __init__(self):
+        self.buckets = {}
+        self._started_at = None
+        self._total = 0
+        self._lock = threading.Lock()
+
+    def retry_after(self, peer):
+        with self._lock:
+            now = time.monotonic()
+            if self._started_at is None or now - self._started_at >= 60:
+                self._started_at = now
+                self._total = 0
+                self.buckets.clear()
+            count = self.buckets.get(peer, 0)
+            if self._total >= 200 or count >= 20:
+                return max(1, math.ceil(self._started_at + 60 - now))
+            self.buckets[peer] = count + 1
+            self._total += 1
+            return 0
+
+
+def create_app(schedule=None, visit_db_path=None, metadata_registry=None):
     app = Flask(__name__)
+    try:
+        proxy_hops = int(os.environ.get('TRUSTED_PROXY_HOPS', '0'))
+        if proxy_hops < 0:
+            raise ValueError
+    except ValueError:
+        raise ValueError('TRUSTED_PROXY_HOPS must be a non-negative integer.') from None
+    app.config['TRUSTED_PROXY_HOPS'] = proxy_hops
+    if proxy_hops:
+        # Opt in only when ingress strips/sets these headers and the exact hop
+        # count is known. Never infer trust from the presence of a header.
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxy_hops, x_proto=proxy_hops,
+                                x_host=0, x_port=0, x_prefix=0)
     app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_BYTES
     app.config['VISIT_DB_PATH'] = visit_db_path or os.environ.get(
         'VISIT_DB_PATH', os.path.join(app.instance_path, 'visits.sqlite3')
     )
 
-    def _admin_required(view):
-        @wraps(view)
-        def wrapped(*args, **kwargs):
-            required = os.environ.get('ADMIN_PASSWORD', '').strip()
-            auth = request.authorization
-            if not required:
-                return jsonify({'error': 'Visitor report is disabled. Set ADMIN_PASSWORD.'}), 503
-            if not auth or not hmac.compare_digest(auth.password or '', required):
-                return ('Admin password required.', 401, {
-                    'WWW-Authenticate': 'Basic realm="Room Finder visitor report"'
-                })
-            return view(*args, **kwargs)
-        return wrapped
+    limiter = _ProtectedRateLimiter()
+    app.extensions['protected_rate_limiter'] = limiter
 
-    # Schedule metadata tracked alongside the mutable list.
-    # NOTE: uploads mutate this in-process list, which only stays consistent
-    # because gunicorn runs a single worker. Don't add -w N without moving
-    # schedule reload to a file-watch or per-request mtime check.
-    meta = {'filename': '', 'loaded_at': None, 'term': None}
-    if schedule:
-        meta['term'] = _term_from_entries(schedule)
+    def _protected_required(secret_name, *, allow_form=False):
+        def decorate(view):
+            @wraps(view)
+            def wrapped(*args, **kwargs):
+                if request.method == 'OPTIONS':
+                    return view(*args, **kwargs)
+                required = os.environ.get(secret_name, '').strip()
+                if not required:
+                    return jsonify({'error': f'This endpoint is disabled. Set {secret_name}.'}), 503
+                is_admin = secret_name == 'ADMIN_PASSWORD'
+                if not is_admin and not (required.isascii() and required.isprintable()):
+                    return jsonify({'error': 'This endpoint is disabled. UPLOAD_PASSWORD must contain only printable ASCII characters.'}), 503
+                supplied = ''
+                if is_admin:
+                    auth = request.authorization
+                    if auth and auth.type == 'basic':
+                        supplied = auth.password or ''
+                elif 'password' not in request.args:
+                    # A supplied header is authoritative: never fall back to
+                    # multipart credentials when a header is invalid.
+                    if 'Authorization' in request.headers:
+                        # Parse the raw scheme/value: Werkzeug interprets an
+                        # internal '=' as auth parameters, not a Bearer secret.
+                        parts = request.headers['Authorization'].split(None, 1)
+                        if len(parts) == 2 and parts[0].lower() == 'bearer':
+                            supplied = parts[1].strip()
+                    elif allow_form:
+                        # Reading the multipart envelope is necessary for the
+                        # Banner form credential. No file is saved or schedule
+                        # parsed until authorization has succeeded.
+                        supplied = request.form.get('password', '').strip()
+                if not hmac.compare_digest(supplied.encode('utf-8'), required.encode('utf-8')):
+                    presented = supplied or request.headers.get('Authorization') or 'password' in request.args
+                    retry_after = limiter.retry_after(request.remote_addr or '') if presented else 0
+                    if retry_after:
+                        return jsonify({'error': 'Too many failed credentials. Try again later.'}), 429, {
+                            'Retry-After': str(retry_after),
+                        }
+                    challenge = 'Basic realm="Room Finder visitor report"' if is_admin else 'Bearer'
+                    return jsonify({'error': 'Invalid or missing credentials.'}), 401, {
+                        'WWW-Authenticate': challenge,
+                    }
+                return view(*args, **kwargs)
+            return wrapped
+        return decorate
 
-    def _activate(entries, filename):
-        schedule.clear()
-        schedule.extend(entries)
-        meta['filename'] = filename
-        meta['loaded_at'] = datetime.now().isoformat(timespec='seconds')
-        meta['term'] = _term_from_entries(entries) or _term_code_from_filename(filename)
+    _admin_required = _protected_required('ADMIN_PASSWORD')
+
+    registry = metadata_registry if metadata_registry is not None else load_registry()
+    storage_dir = _storage_folder()
+    app.config['SCHEDULE_STORAGE_DIR'] = storage_dir
+    store = ScheduleStore(storage_dir)
+    auto_loaded = schedule is None
+    with _schedule_lock:
+        if auto_loaded:
+            entries, record = _load_best_schedule()
+            snapshot = _make_snapshot(entries, record)
+        else:
+            snapshot = _make_snapshot(schedule)
+
+    def _select_snapshot(replacement=None, replacement_entries=None):
+        """Prepare selection without modifying active state or published files."""
+        try:
+            candidates = _all_schedule_candidates(storage_dir, replacement=replacement)
+        except (OSError, ValueError):
+            if replacement is not None:
+                raise  # publication must fail closed, not silently keep old data
+            return snapshot
+        for record in candidates:
+            if replacement is not None and record.path == replacement.path:
+                return _make_snapshot(replacement_entries, replacement)
+            if _record_key(record) == snapshot.record_key:
+                return snapshot
+            loaded = _load_candidate(record)
+            if loaded is not None:
+                entries, validated = loaded
+                return _make_snapshot(entries, validated)
+        # Missing/corrupt candidates must not erase the last usable snapshot.
+        return snapshot
 
     def _maybe_reactivate():
-        """Switch to a better schedule file if the semester rolled over.
-        Cheap no-op when nothing changed: the scan stops as soon as it
-        reaches the currently active file."""
-        for candidate in _default_schedule_candidates(UPLOAD_FOLDER):
-            if candidate == meta['filename']:
-                return
-            try:
-                entries = load_schedule(os.path.join(UPLOAD_FOLDER, candidate))
-            except Exception:
-                continue
-            if entries:
-                _activate(entries, candidate)
-                print(f"Semester rollover: switched to '{candidate}' ({len(entries)} entries).")
-                return
+        nonlocal snapshot
+        snapshot = _select_snapshot()
 
-    # Only re-resolve from disk for apps that loaded from disk — never for
-    # explicitly injected schedules (tests)
-    auto_loaded = schedule is None
+    availability_paths = {'/api/rooms', '/api/rooms/all', '/api/buildings', '/api/room/schedule'}
 
-    if schedule is None:
-        schedule = []
-        entries, filename = _load_best_schedule()
-        if entries:
-            _activate(entries, filename)
-            print(f"Loaded {len(schedule)} entries from '{filename}'.")
-        else:
-            print("No usable schedule file found — upload one via the Settings page.")
+    @app.before_request
+    def prepare_availability_context():
+        if request.path not in availability_paths | {'/api/schedule-info', '/api/heatmap', '/api/terms'}:
+            return
+        with _schedule_lock:
+            if auto_loaded:
+                _maybe_reactivate()
+            g.schedule_snapshot = snapshot
+            if request.path == '/api/terms':
+                g.schedule_catalog = _stored_term_files(storage_dir, snapshot)
+        g.schedule_entries = g.schedule_snapshot.entries
+        g.schedule_version = g.schedule_snapshot.version
+        if request.path not in availability_paths:
+            return
+
+        weekday, now, for_mins = resolve_query_context()
+        at_time = parse_at_param(request.args.get('at'))
+        preview = at_time is not None or parse_day_param(request.args.get('day')) is not None
+        g.query_context = (weekday, now, for_mins)
+        g.query_preview = preview
+        if request.path == '/api/room/schedule' and '_weekday' in request.args:
+            override = parse_day_param(request.args['_weekday'])
+            if not request.args['_weekday'].strip().lstrip('+-').isdigit() or override is None:
+                return jsonify({'error': '_weekday must be an integer from 0 to 6',
+                                'error_code': 'invalid_weekday'}), 400
+            weekday = override
+            g.query_context = (weekday, now, for_mins)
+            g.query_preview = True
+
+        until_text = request.args.get('until')
+        until = parse_at_param(until_text)
+        if until_text is not None and (not re.fullmatch(r'[0-9]{2}:[0-9]{2}', until_text) or until is None):
+            return jsonify({'error': 'Window end must be a valid HH:MM time',
+                            'error_code': 'invalid_window'}), 400
+        try:
+            # Use the same validation even for empty inventories and unknown rooms.
+            get_availability_facts([], now, min_duration_mins=for_mins, until=until)
+        except ValueError as error:
+            code, message = 'invalid_window', str(error)
+            if at_time is None:
+                if until is not None and until <= now:
+                    code = 'window_ended'
+                elif until is None and now.hour * 60 + now.minute + for_mins > 24 * 60:
+                    code = 'duration_exceeds_day'
+                    message = 'Choose a shorter duration or a start time; this search cannot cross midnight.'
+            return jsonify({'error': message, 'error_code': code}), 400
+        g.query_until = until
 
     @app.after_request
-    def add_upload_cors_headers(response):
-        # Applied via after_request so error responses (401/413/422) carry the
-        # headers too — otherwise the bookmarklet can't read failure reasons.
+    def add_availability_headers(response):
+        if hasattr(g, 'schedule_version'):
+            response.headers['X-Schedule-Version'] = g.schedule_version
+        if hasattr(g, 'query_context'):
+            weekday, now, _ = g.query_context
+            response.headers['X-Query-Day'] = list(DAY_NAMES)[weekday].title()
+            response.headers['X-Query-Time'] = now.strftime('%H:%M')
+            response.headers['X-Query-Timezone'] = 'America/New_York'
+            response.headers['X-Query-Preview'] = '1' if g.query_preview else '0'
+        return response
+
+    @app.after_request
+    def add_protected_headers(response):
+        # Apply by path, not decorator, to cover all statuses, including
+        # framework-generated 405/413/500 responses and unauthenticated errors.
+        if request.path in PROTECTED_ENDPOINTS:
+            response.headers['Cache-Control'] = 'no-store'
+            response.headers['X-Robots-Tag'] = 'noindex, nofollow'
         if request.path == UPLOAD_ENDPOINT:
             response.headers['Access-Control-Allow-Origin'] = BANNER_ORIGIN
             response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
         return response
+
+    @app.errorhandler(413)
+    def upload_too_large(error):
+        if request.path == UPLOAD_ENDPOINT:
+            return jsonify({'error': 'Schedule file exceeds the upload size limit.'}), 413
+        return error.get_response()
 
     @app.route("/ping")
     def ping():
@@ -363,9 +646,9 @@ def create_app(schedule=None, visit_db_path=None):
 
     @app.route("/")
     def index():
-        visitor_id = request.cookies.get('room_finder_visitor') or uuid.uuid4().hex
-        forwarded = request.headers.get('X-Forwarded-For', '')
-        ip_address = forwarded.split(',', 1)[0].strip() if forwarded else (request.remote_addr or '')
+        visitor_id = normalize_visitor_id(request.cookies.get('room_finder_visitor'))
+        # Same identity as throttling; ProxyFix adjusts it only with explicit trust.
+        ip_address = request.remote_addr or ''
         salt = os.environ.get('VISITOR_LOG_SALT') or os.environ.get('ADMIN_PASSWORD') or 'local-development'
         try:
             record_visit(
@@ -373,7 +656,9 @@ def create_app(schedule=None, visit_db_path=None):
                 request.headers.get('User-Agent', ''),
                 request.headers.get('Referer', ''), salt,
             )
-        except sqlite3.Error:
+        except (sqlite3.Error, OSError):
+            # Analytics must never take down the public page; an unwritable or
+            # missing storage directory raises OSError before SQLite is reached.
             app.logger.exception('Could not record visitor')
         response = app.make_response(render_template("index.html"))
         response.set_cookie(
@@ -389,10 +674,7 @@ def create_app(schedule=None, visit_db_path=None):
         for visit in visits:
             parsed = datetime.fromisoformat(visit['visited_at'])
             visit['local_time'] = parsed.astimezone(EASTERN).strftime('%a, %b %-d, %Y · %-I:%M:%S %p')
-        response = app.make_response(render_template('visits.html', visits=visits, summary=summary))
-        response.headers['Cache-Control'] = 'no-store'
-        response.headers['X-Robots-Tag'] = 'noindex, nofollow'
-        return response
+        return render_template('visits.html', visits=visits, summary=summary)
 
     @app.route("/sw.js")
     def service_worker():
@@ -410,89 +692,38 @@ def create_app(schedule=None, visit_db_path=None):
             'install.html'
         )
 
+    def _query_rooms(building=None, entries=None):
+        weekday, now, for_mins = g.query_context
+        return [registry.enrich_room(row) for row in get_room_availability(
+            g.schedule_entries if entries is None else entries, weekday, now,
+            building=building, min_duration_mins=for_mins, until=g.query_until,
+        )]
+
     @app.route("/api/rooms")
     def rooms():
-        weekday, now, for_mins = resolve_query_context()
-        building = request.args.get("building") or None
-        until = parse_at_param(request.args.get("until"))
-        result = get_empty_rooms(schedule, weekday=weekday, now=now, building=building,
-                                 min_duration_mins=for_mins, until=until)
-        return jsonify(result)
+        result = _query_rooms(building=request.args.get('building') or None)
+        return jsonify([row for row in result if row['matches_requested_window']])
 
     @app.route("/api/buildings")
     def buildings_api():
-        weekday, now, for_mins = resolve_query_context()
-        empty_rooms = get_empty_rooms(schedule, weekday=weekday, now=now, min_duration_mins=for_mins)
-
-        empty_by_building = {}
-        for room in empty_rooms:
-            b = room['building']
-            empty_by_building[b] = empty_by_building.get(b, 0) + 1
-
-        rooms_by_building = {}
-        for entry in schedule:
-            b = entry['building']
-            r = entry['room']
-            if b not in rooms_by_building:
-                rooms_by_building[b] = set()
-            rooms_by_building[b].add(r)
-
-        result = []
-        for b in sorted(rooms_by_building.keys()):
-            total = len(rooms_by_building[b])
-            empty = empty_by_building.get(b, 0)
-            result.append({
-                'building': b,
-                'total_rooms': total,
-                'empty_rooms': empty,
-                'occupied_rooms': total - empty,
-                'occupancy_pct': round((total - empty) / total * 100) if total > 0 else 0
+        by_building = {}
+        for room in _query_rooms():
+            counts = by_building.setdefault(room['building'], {
+                'building': room['building'], 'total_rooms': 0,
+                'empty_rooms': 0, 'matching_rooms': 0,
             })
+            counts['total_rooms'] += 1
+            counts['empty_rooms'] += int(room['empty'])
+            counts['matching_rooms'] += int(room['matches_requested_window'])
 
-        return jsonify(result)
+        for counts in by_building.values():
+            counts['occupied_rooms'] = counts['total_rooms'] - counts['empty_rooms']
+            counts['occupancy_pct'] = round(counts['occupied_rooms'] / counts['total_rooms'] * 100)
+        return jsonify([registry.enrich_building(by_building[b]) for b in sorted(by_building)])
 
     @app.route("/api/rooms/all")
     def all_rooms_api():
-        weekday, now, for_mins = resolve_query_context()
-        building_filter = request.args.get("building") or None
-
-        empty_rooms_list = get_empty_rooms(schedule, weekday=weekday, now=now, building=building_filter, min_duration_mins=for_mins)
-        empty_map = {(r['building'], r['room']): r for r in empty_rooms_list}
-
-        rooms_seen = {}
-        for entry in schedule:
-            b = entry['building']
-            r = entry['room']
-            if building_filter and b != building_filter:
-                continue
-            key = (b, r)
-            if key not in rooms_seen:
-                rooms_seen[key] = True
-
-        result = []
-        for (b, r) in sorted(rooms_seen.keys()):
-            is_empty = (b, r) in empty_map
-            minutes = empty_map.get((b, r), {}).get('minutes_until_next')
-
-            r_upper = str(r).upper()
-            if r_upper.startswith('G') or r_upper.startswith('B'):
-                floor = 0
-            else:
-                floor = 1
-                for ch in r_upper:
-                    if ch.isdigit():
-                        floor = int(ch)
-                        break
-
-            result.append({
-                'building': b,
-                'room': r,
-                'floor': floor,
-                'empty': is_empty,
-                'minutes_until_next': minutes,
-                'capacity': empty_map.get((b, r), {}).get('capacity'),
-            })
-
+        result = _query_rooms(building=request.args.get('building') or None)
         return jsonify(result)
 
     @app.route("/api/room/schedule")
@@ -502,33 +733,15 @@ def create_app(schedule=None, visit_db_path=None):
         if not building or not room_num:
             return jsonify({'error': 'building and room are required'}), 400
 
-        weekday, now = get_current_time()
-
-        # Allow time override (used by frontend time-filter and tests)
-        at_time = parse_at_param(request.args.get("at"))
-        if at_time:
-            now = at_time
-
-        # Named day override, same param the rest of the frontend uses. Without
-        # this the room detail sheet silently showed today while the buildings
-        # list and building panel honoured the filter.
-        day_override = parse_day_param(request.args.get("day"))
-        if day_override is not None:
-            weekday = day_override
-
-        # Numeric escape hatch, kept for existing tests and callers.
-        _wd = request.args.get("_weekday")
-        if _wd is not None:
-            try:
-                weekday = int(_wd)
-            except ValueError:
-                pass
-
+        weekday, now, _ = g.query_context
         now_min = now.hour * 60 + now.minute
-
+        room_entries = [e for e in g.schedule_entries
+                        if e['building'] == building and e['room'] == room_num]
+        if not room_entries:
+            return jsonify({'error': 'Room not found in the active schedule'}), 404
+        availability, = _query_rooms(entries=room_entries)
         today_classes = sorted(
-            [e for e in schedule
-             if e['building'] == building and e['room'] == room_num and weekday in e['days']],
+            [e for e in room_entries if weekday in e['days']],
             key=lambda c: c['time_start']
         )
 
@@ -547,30 +760,16 @@ def create_app(schedule=None, visit_db_path=None):
                 'instructor': cls.get('instructor', ''),
             })
 
-        occupied_now = any(c['start_min'] <= now_min < c['end_min'] for c in classes_out)
         next_cls = next((c for c in classes_out if c['start_min'] > now_min), None)
-        weekday_names = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
-
-        # ── Compute next free window ──────────────────────────────────────────
         next_free_window = _compute_next_free_window(classes_out, now_min)
-
-        # ── Compute room capacity (max across all schedule entries for this room) ──
-        room_capacity = max(
-            (e.get('capacity') for e in schedule
-             if e['building'] == building and e['room'] == room_num and e.get('capacity')),
-            default=None,
-        )
-
         return jsonify({
-            'building':          building,
-            'room':              room_num,
+            **availability,
             'classes':           classes_out,
             'now_min':           now_min,
-            'occupied_now':      occupied_now,
+            'occupied_now':      not availability['empty'],
             'next_class':        next_cls,
-            'weekday':           weekday_names[weekday],
+            'weekday':           list(DAY_NAMES)[weekday].title(),
             'next_free_window':  next_free_window,
-            'capacity':          room_capacity,
         })
 
     @app.route("/api/heatmap")
@@ -581,7 +780,7 @@ def create_app(schedule=None, visit_db_path=None):
         if not building:
             return jsonify({'error': 'building is required'}), 400
 
-        entries = [e for e in schedule if e['building'] == building]
+        entries = [e for e in g.schedule_entries if e['building'] == building]
         if not entries:
             return jsonify({'error': f'No rooms found for building {building}.'}), 404
 
@@ -611,48 +810,59 @@ def create_app(schedule=None, visit_db_path=None):
     def terms_api():
         """All semesters stored on disk, newest first."""
         today = datetime.now(EASTERN).date()
-        return jsonify([
-            {'term': t, 'semester': _term_label(t), 'filename': fn,
-             'source': src, 'active': fn == meta['filename'],
-             'status': _schedule_status(t, today)}
-            for t, (fn, src) in sorted(_stored_term_files(UPLOAD_FOLDER).items(),
-                                       reverse=True)
-        ])
+        terms = []
+        for term, (path, source) in sorted(g.schedule_catalog.items(), reverse=True):
+            active = bool(g.schedule_snapshot.record_key and path == g.schedule_snapshot.record_key[0])
+            filename = f'uploaded_schedule_{term}{Path(path).suffix}' if source == 'uploaded' else Path(path).name
+            terms.append({
+                'term': term, 'semester': _term_label(term),
+                'filename': g.schedule_snapshot.filename if active else filename,
+                'source': source, 'active': active, 'status': _schedule_status(term, today),
+            })
+        return jsonify(terms)
 
     @app.route("/api/export-schedule")
+    @_protected_required('UPLOAD_PASSWORD')
     def export_schedule():
-        """Download a stored term's schedule file — lets an admin save a
-        runtime upload into the repo so it survives Render redeploys."""
-        required_pw = os.environ.get('UPLOAD_PASSWORD', '').strip()
-        if required_pw and request.args.get('password', '').strip() != required_pw:
-            return jsonify({'error': 'Invalid password.'}), 401
+        """Download a stored term's schedule using a Bearer upload credential.
+        Password query parameters are rejected, even with a valid header."""
         term_str = request.args.get('term', '').strip()
-        if not term_str.isdigit():
+        # str.isdigit() accepts superscripts and other Unicode digits that
+        # int() rejects, and does not bound the value echoed back on 404.
+        if not re.fullmatch(r'[0-9]{1,9}', term_str):
             return jsonify({'error': 'term is required, e.g. ?term=202650'}), 400
-        entry = _stored_term_files(UPLOAD_FOLDER).get(int(term_str))
+        with _schedule_lock:
+            if auto_loaded:
+                _maybe_reactivate()
+            entry = _stored_term_files(storage_dir, snapshot).get(int(term_str))
         if not entry:
             return jsonify({'error': f'No stored schedule for term {term_str}.'}), 404
         filename = entry[0]
         ext = os.path.splitext(filename)[1]
         return send_from_directory(
-            UPLOAD_FOLDER, filename, as_attachment=True,
+            os.path.dirname(filename), os.path.basename(filename), as_attachment=True,
             download_name=f'Course_Schedule_{term_str}{ext}'
         )
 
     @app.route("/api/schedule-info")
     def schedule_info():
-        if auto_loaded:
-            _maybe_reactivate()
-        buildings = set(e['building'] for e in schedule)
-        rooms = set((e['building'], e['room']) for e in schedule)
+        entries = g.schedule_entries
+        buildings = set(e['building'] for e in entries)
+        rooms = set((e['building'], e['room']) for e in entries)
         weekday, _ = get_current_time()
-        has_classes_today = any(weekday in e['days'] for e in schedule)
+        has_classes_today = any(weekday in e['days'] for e in entries)
         today = datetime.now(EASTERN).date()
-        term = meta['term'] or _term_code_from_filename(meta['filename'])
+        state = g.schedule_snapshot
+        term = state.term
         return jsonify({
-            'filename': meta['filename'],
-            'loaded_at': meta['loaded_at'],
-            'entries': len(schedule),
+            'filename': state.filename,
+            'loaded_at': state.activated_at,
+            'activated_at': state.activated_at,
+            'imported_at': state.imported_at,
+            'source_filename': state.source_filename,
+            'source_exported_at': state.source_exported_at,
+            'entries': len(entries),
+            'schedule_version': g.schedule_version,
             'buildings': len(buildings),
             'rooms': len(rooms),
             'semester': _term_label(term),
@@ -664,15 +874,10 @@ def create_app(schedule=None, visit_db_path=None):
         })
 
     @app.route("/api/upload-schedule", methods=["POST", "OPTIONS"])
+    @_protected_required('UPLOAD_PASSWORD', allow_form=True)
     def upload_schedule():
         if request.method == "OPTIONS":
             return "", 204  # CORS preflight; headers added by after_request
-        # Password check — only enforced when UPLOAD_PASSWORD env var is set
-        required_pw = os.environ.get('UPLOAD_PASSWORD', '').strip()
-        if required_pw:
-            supplied_pw = request.form.get('password', '').strip()
-            if not supplied_pw or supplied_pw != required_pw:
-                return jsonify({'error': 'Invalid password.'}), 401
 
         if 'file' not in request.files:
             return jsonify({'error': 'No file provided.'}), 400
@@ -682,56 +887,57 @@ def create_app(schedule=None, visit_db_path=None):
         if not f.filename.lower().endswith(('.csv', '.xlsx')):
             return jsonify({'error': 'Only CSV or Excel (.xlsx) files are accepted.'}), 400
 
-        # Validate against a temp file first — the final path is in the restart
-        # load order, so a bad file must never land there.
-        ext = '.xlsx' if f.filename.lower().endswith('.xlsx') else '.csv'
-        # Temp name keeps the real extension — load_schedule sniffs it
-        tmp_path = os.path.join(UPLOAD_FOLDER, f'uploaded_schedule_tmp{ext}')
-        f.save(tmp_path)
-
-        try:
-            new_data = load_schedule(tmp_path)
-        except Exception as e:
-            os.remove(tmp_path)
-            return jsonify({'error': f'Could not parse CSV: {e}'}), 422
-
-        if not new_data:
-            os.remove(tmp_path)
-            return jsonify({'error': 'CSV parsed but no valid schedule entries found. Check the file format.'}), 422
-
-        # One file per term so semesters coexist (upload fall while summer runs)
-        term = _term_from_entries(new_data) or _term_code_from_filename(f.filename)
-        stem = f'uploaded_schedule_{term}' if term else 'uploaded_schedule'
-        os.replace(tmp_path, os.path.join(UPLOAD_FOLDER, f'{stem}{ext}'))
-
-        # Remove files this upload supersedes: the same term's other extension
-        # and legacy un-termed uploads (both outrank term files at load time).
-        other_ext = '.csv' if ext == '.xlsx' else '.xlsx'
-        for superseded in (f'{stem}{other_ext}',
-                           'uploaded_schedule.csv', 'uploaded_schedule.xlsx'):
-            path = os.path.join(UPLOAD_FOLDER, superseded)
-            if os.path.exists(path):
-                os.remove(path)
-
-        # Activate the best term for today — not necessarily the one uploaded
-        best_entries, best_file = _load_best_schedule()
-        if best_entries:
-            _activate(best_entries, best_file)
-
-        buildings = set(e['building'] for e in new_data)
-        rooms = set((e['building'], e['room']) for e in new_data)
-        print(f"Upload saved: {len(new_data)} entries from '{f.filename}' "
-              f"(term {term}); active schedule is '{meta['filename']}'")
-        return jsonify({
-            'success': True,
-            'filename': f.filename,
-            'loaded_at': meta['loaded_at'],
-            'entries': len(new_data),
-            'buildings': len(buildings),
-            'rooms': len(rooms),
-            'uploaded_semester': _term_label(term),
-            'active_semester': _term_label(meta['term']),
-        })
+        nonlocal snapshot, auto_loaded
+        source_filename = f.filename.replace('\\', '/').rsplit('/', 1)[-1]
+        if len(source_filename) > 255 or any(ord(ch) < 32 for ch in source_filename):
+            return jsonify({'error': 'Use a source filename of at most 255 characters without control characters.'}), 400
+        ext = '.xlsx' if source_filename.lower().endswith('.xlsx') else '.csv'
+        tmp_path = None
+        with _schedule_lock:
+            try:
+                tmp_path = store.stage(f, ext)
+                try:
+                    import_report = {}
+                    new_data = load_schedule(tmp_path, report=import_report)
+                    if not new_data:
+                        raise ScheduleValidationError(['no scheduled in-person entries'])
+                    term = _term_from_entries(new_data)
+                except ScheduleValidationError as error:
+                    return jsonify({'error': str(error), 'diagnostics': error.diagnostics,
+                                    'error_count': error.error_count}), 422
+                except Exception:
+                    # Third-party parser errors can contain arbitrary workbook text.
+                    return jsonify({'error': 'Could not parse schedule. Export a fresh single-semester CSV or XLSX file.'}), 422
+                version = _schedule_version(new_data)
+                publication = store.prepare(tmp_path, term, source_filename, version)
+                next_snapshot = _select_snapshot(publication.record, new_data)
+                # Prepare the complete response and snapshot before the commit point.
+                payload = {
+                    'success': True, 'filename': source_filename,
+                    'import_diagnostics': import_report,
+                    'exclusion_note': 'Explicit online modes and unscheduled blank/TBA meetings are excluded from physical-room occupancy.',
+                    'loaded_at': next_snapshot.activated_at,
+                    'activated_at': next_snapshot.activated_at,
+                    'imported_at': publication.record.imported_at,
+                    'source_filename': source_filename, 'source_exported_at': None,
+                    'schedule_version': next_snapshot.version,
+                    'entries': len(new_data),
+                    'buildings': len({e['building'] for e in new_data}),
+                    'rooms': len({(e['building'], e['room']) for e in new_data}),
+                    'uploaded_semester': _term_label(term),
+                    'active_semester': _term_label(next_snapshot.term),
+                }
+                response = jsonify(payload)
+                store.commit(publication)
+                tmp_path = None  # moved into its immutable published payload
+                snapshot = next_snapshot
+                auto_loaded = True
+                return response
+            except (OSError, ValueError):
+                return jsonify({'error': 'Schedule could not be saved. The previous schedule is unchanged; check storage permissions and retry.'}), 500
+            finally:
+                if tmp_path is not None:
+                    Path(tmp_path).unlink(missing_ok=True)
 
     _start_keepalive()
     return app

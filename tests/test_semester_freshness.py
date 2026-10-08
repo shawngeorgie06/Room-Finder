@@ -66,10 +66,17 @@ class TestInSession:
         assert _in_session(None, date(2026, 6, 11)) is None
 
 
+@pytest.mark.parametrize('filename', ['uploaded_schedule_000010.csv', 'uploaded_schedule_202699.csv', 'uploaded_schedule_2026900.csv'])
+def test_invalid_filename_term_is_unknown(filename):
+    from app import _term_code_from_filename
+    assert _term_code_from_filename(filename) is None
+
+
 class TestTermFromEntries:
-    def test_most_common_term_wins(self):
+    def test_mixed_terms_are_rejected_not_majority_selected(self):
         entries = [{'term': '202650'}, {'term': '202650'}, {'term': '202610'}]
-        assert _term_from_entries(entries) == 202650
+        with pytest.raises(ValueError, match='Mixed terms'):
+            _term_from_entries(entries)
 
     def test_missing_or_blank_terms_return_none(self):
         assert _term_from_entries([{'term': ''}, {}]) is None
@@ -79,10 +86,10 @@ class TestTermFromEntries:
 class TestDefaultScheduleCandidates:
     TODAY = date(2026, 6, 11)  # Summer 2026 → expected term 202650
 
-    def test_legacy_upload_wins(self, tmp_path):
+    def test_termed_candidate_precedes_legacy_termless_fallback(self, tmp_path):
         (tmp_path / "uploaded_schedule.csv").write_text("x")
         (tmp_path / "Course_Schedule_202650.csv").write_text("x")
-        assert _default_schedule_candidates(str(tmp_path), self.TODAY)[0] == "uploaded_schedule.csv"
+        assert _default_schedule_candidates(str(tmp_path), self.TODAY)[0] == "Course_Schedule_202650.csv"
 
     def test_current_term_first_then_past_then_default(self, tmp_path):
         (tmp_path / "Course_Schedule_202610.csv").write_text("x")
@@ -135,6 +142,7 @@ class TestScheduleStatus:
 class TestMultiTermUpload:
     def _client(self, tmp_path, monkeypatch):
         monkeypatch.setattr("app.UPLOAD_FOLDER", str(tmp_path))
+        monkeypatch.setenv("UPLOAD_PASSWORD", "test-semester-upload-secret")
         app = create_app(schedule=[])
         app.config['TESTING'] = True
         return app.test_client()
@@ -143,7 +151,7 @@ class TestMultiTermUpload:
         import io
         return client.post(
             "/api/upload-schedule",
-            data={"file": (io.BytesIO(body.encode()), name)},
+            data={"file": (io.BytesIO(body.encode()), name), "password": "test-semester-upload-secret"},
             content_type="multipart/form-data",
         )
 
@@ -152,14 +160,17 @@ class TestMultiTermUpload:
         fall = GOOD_CSV.replace("202610", "202690")
         resp = self._post(client, fall)
         assert resp.status_code == 200
-        assert (tmp_path / "uploaded_schedule_202690.csv").exists()
+        from schedule_store import published_records
+        assert 'uploaded_schedule_202690.csv' in published_records(tmp_path)
 
     def test_uploads_for_different_terms_coexist(self, tmp_path, monkeypatch):
         client = self._client(tmp_path, monkeypatch)
         self._post(client, GOOD_CSV)  # spring 202610
         self._post(client, GOOD_CSV.replace("202610", "202690"))  # fall
-        assert (tmp_path / "uploaded_schedule_202610.csv").exists()
-        assert (tmp_path / "uploaded_schedule_202690.csv").exists()
+        from schedule_store import published_records
+        assert 'uploaded_schedule_202610.csv' in published_records(tmp_path)
+        from schedule_store import published_records
+        assert 'uploaded_schedule_202690.csv' in published_records(tmp_path)
 
     def test_best_term_activated_after_upload(self, tmp_path, monkeypatch):
         # Upload fall first, then spring: fall must stay active (it is the

@@ -7,6 +7,8 @@ start.sh
 
 # Node — only needed to rebuild static/tailwind.css
 node_modules/
+# Browser failure artifacts and HTML/JSON reports (override root per parallel run)
+test-results/
 
 # Schedule data — mostly runtime artifacts, except committed term exports
 *.csv
@@ -26,6 +28,8 @@ instance/
 
 # Uploaded schedules (written at runtime by /api/upload-schedule, one per term)
 uploaded_schedule*
+# Transactional schedule storage and staging files in the default upload folder
+/.schedule-*
 
 # Local virtualenv
 .venv/

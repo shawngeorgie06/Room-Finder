@@ -1,0 +1,95 @@
+name: Tests and generated assets
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ROOM_FINDER_TEST_PYTHON: python
+    steps:
+      - name: Initialize test paths
+        run: |
+          printf 'VISIT_DB_PATH=%s/unit-visits.sqlite3\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'PLAYWRIGHT_OUTPUT_DIR=%s/playwright-%s-%s\n' "$RUNNER_TEMP" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install pinned Python and Node dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.txt
+          python -m pip check
+          npm ci
+      - name: Python and Node-backed unit tests (no skipped coverage)
+        run: |
+          node --version
+          python -m pytest tests/ -q --junitxml="${{ runner.temp }}/pytest.xml"
+          python - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          report = ET.parse(os.path.join(os.environ['RUNNER_TEMP'], 'pytest.xml'))
+          skipped = list(report.iter('skipped'))
+          assert not skipped, f'{len(skipped)} unexpectedly skipped tests'
+          PY
+      - name: Verify generated CSS and service-worker asset consistency
+        run: |
+          npm run check:css
+          python -m pytest tests/test_service_worker_cache.py -q
+      - name: Install matching Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Browser regressions against disposable Flask servers
+        id: browser
+        run: npm run test:browser
+      - name: Require browser coverage with no skips, flakes or expected failures
+        if: ${{ !cancelled() && steps.browser.outcome != 'skipped' }}
+        run: |
+          node - <<'JS'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const report = JSON.parse(fs.readFileSync(path.join(process.env.PLAYWRIGHT_OUTPUT_DIR, 'results.json'), 'utf8'));
+          const tests = suites => suites.flatMap(suite => [
+            ...(suite.specs || []).flatMap(spec => spec.tests),
+            ...tests(suite.suites || []),
+          ]);
+          assert.equal((report.errors || []).length, 0, 'Browser runner errors');
+          assert.ok(report.stats.expected > 0, 'No browser tests executed');
+          for (const state of ['skipped', 'flaky', 'unexpected']) {
+            assert.equal(report.stats[state], 0, `Browser ${state} tests are not allowed`);
+          }
+          const cases = tests(report.suites);
+          assert.equal(cases.length, report.stats.expected, 'Incomplete browser report');
+          assert.ok(cases.every(test => test.expectedStatus === 'passed'
+            && test.status === 'expected' && test.results.length === 1
+            && test.results[0].status === 'passed'), 'Every browser test must pass on its first attempt');
+          console.log(`${cases.length} browser tests passed with complete coverage`);
+          JS
+      - name: Preserve test reports and browser failure artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-evidence
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/pytest.xml
+            ${{ env.PLAYWRIGHT_OUTPUT_DIR }}

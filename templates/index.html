@@ -211,7 +211,7 @@
 <aside class="fixed left-0 top-16 h-[calc(100vh-64px)] w-64 hidden md:flex flex-col pt-4 bg-[#080808] border-r border-primary/5 z-40">
   <div class="px-6 mb-8">
     <div class="text-sm font-black text-[#00E676] font-headline tracking-widest">NJIT Room Finder</div>
-    <div id="sidebar-semester" class="text-label text-on-surface-variant font-label tracking-[0.2em] mt-1 opacity-50 uppercase">Live</div>
+    <div id="sidebar-semester" class="text-label text-on-surface-variant font-label tracking-[0.2em] mt-1 opacity-50 uppercase">Loading</div>
   </div>
   <nav class="flex-1 px-3 space-y-1">
     <a id="nav-buildings" href="#" onclick="switchView('dashboard');return false;"
@@ -229,7 +229,7 @@
   </nav>
   <!-- Sidebar top rooms -->
   <div class="flex-1 px-3 py-2 overflow-hidden">
-    <div class="text-label font-label text-on-surface-variant/50 uppercase tracking-widest px-2 mb-2">Best Right Now</div>
+    <div class="text-label font-label text-on-surface-variant/50 uppercase tracking-widest px-2 mb-2">Matching rooms</div>
     <div id="sidebar-top-rooms" class="space-y-0.5"></div>
   </div>
   <div class="p-4 space-y-4">
@@ -238,7 +238,7 @@
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2">
           <div class="w-2 h-2 rounded-full bg-primary animate-pulse"></div>
-          <span class="text-[11px] font-bold text-primary">Live</span>
+          <span class="text-[11px] font-bold text-primary" data-live-label>Loading</span>
         </div>
         <div class="flex items-center gap-1.5">
           <svg width="20" height="20" viewBox="0 0 20 20" style="transform:rotate(-90deg)">
@@ -260,6 +260,18 @@
 
 <!-- MAIN CONTENT -->
 <main class="md:ml-64 pt-20 md:pb-12 min-h-screen" style="padding-bottom:max(5rem, calc(3.5rem + env(safe-area-inset-bottom) + 1rem))">
+
+  <!-- Visible status only. #sr-status is the single announcer: renderDataStatus
+       writes the same context and message there once per real change, so a
+       live region here would repeat every receipt and countdown update. -->
+  <section id="data-status" data-state="loading" class="mx-4 md:mx-8 px-4 py-3 border border-primary/20 rounded-sm">
+    <div id="query-context" class="text-sm font-label text-white">Loading query context…</div>
+    <div id="data-status-text" class="text-xs text-on-surface-variant mt-1">Loading schedule…</div>
+    <div id="schedule-day-fact" class="text-xs text-on-surface-variant mt-1">Day-level schedule information is unknown.</div>
+    <div id="query-error" role="alert" class="text-xs text-secondary mt-1"></div>
+    <button id="data-retry" type="button" onclick="refresh()" class="hidden px-4 py-2 text-sm text-primary border border-primary/30 rounded-sm">Retry</button>
+    <button id="data-edit-query" type="button" onclick="editQueryFilters()" class="hidden px-4 py-2 text-sm text-primary border border-primary/30 rounded-sm">Edit filters</button>
+  </section>
 
   <!-- Stale schedule data warning (shown when loaded semester ≠ current semester) -->
   <div id="stale-data-banner" class="hidden mx-4 md:mx-8 mt-4 px-4 py-3 bg-error/10 border border-error/30 rounded-sm flex items-center gap-3">
@@ -303,7 +315,7 @@
         <div class="absolute inset-x-0 bottom-0 z-10 flex items-end justify-between gap-3 p-4
                     bg-gradient-to-t from-[#080808]/95 via-[#080808]/60 to-transparent pointer-events-none">
           <div>
-            <div class="label text-primary mb-1">Campus now</div>
+            <div class="label text-primary mb-1" data-live-label>Campus schedule</div>
             <div id="home-hero-stat" class="text-title text-white">-- rooms free</div>
           </div>
           <span class="label text-on-surface-variant whitespace-nowrap">Open map &rarr;</span>
@@ -314,8 +326,8 @@
       <div id="dash-no-classes-banner" class="hidden mt-6 px-4 py-3 bg-surface-container border border-outline-variant/20 rounded-sm flex items-center gap-3">
         <span class="material-symbols-outlined text-on-surface-variant text-xl">event_busy</span>
         <div>
-          <div class="text-xs font-headline font-bold text-white">No classes scheduled today</div>
-          <div class="text-label text-on-surface-variant font-label mt-0.5">All rooms are available — use the day filter to preview a weekday.</div>
+          <div class="text-xs font-headline font-bold text-white">No recurring classes scheduled — <span id="dash-no-classes-banner-day">day unknown</span></div>
+          <div class="text-label text-on-surface-variant font-label mt-0.5">Based on the class schedule; room access isn't guaranteed.</div>
         </div>
       </div>
 
@@ -332,7 +344,7 @@
           Find Me a Room
         </button>
         <div class="text-label font-label text-on-surface-variant tracking-widest flex flex-wrap items-center gap-x-1.5 gap-y-1">
-          <span class="px-2 py-0.5 bg-primary/20 text-primary font-bold border border-primary/30 tracking-[0.2em]">LIVE</span>
+          <span class="px-2 py-0.5 bg-primary/20 text-primary font-bold border border-primary/30 tracking-[0.2em]" data-live-label>Loading</span>
           <span id="stat-empty" class="text-primary">--</span> free of
           <span id="stat-total">--</span> rooms &middot;
           <span id="stat-bldg">--</span> buildings &middot;
@@ -359,100 +371,46 @@
   <!-- ═══ ROOM GRID VIEW ═══ -->
   <div id="view-rooms" class="hidden px-4 md:px-8 kinetic-grid min-h-screen">
     <div class="max-w-[1400px] mx-auto py-6">
-      <div class="flex items-center justify-between mb-6 border-b border-outline-variant/10 pb-4">
+      <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 mb-6 border-b border-outline-variant/10 pb-4">
         <div>
-          <div id="rooms-view-semester" class="text-label text-primary font-label tracking-widest uppercase mb-1">LIVE</div>
+          <div id="rooms-view-semester" class="text-label text-primary font-label tracking-widest uppercase mb-1" data-live-label>Loading</div>
           <h2 id="rooms-heading" class="text-3xl font-headline font-extrabold tracking-tighter text-white">AVAILABLE ROOMS</h2>
         </div>
         <span id="grid-count" class="text-label text-on-surface-variant font-label tracking-widest uppercase"></span>
         <span id="grid-timestamp" class="text-label text-on-surface-variant/40 font-label ml-3"></span>
       </div>
       <!-- Time Filter -->
-      <div class="mb-4 glass-card border border-primary/10 rounded-sm overflow-hidden">
-        <!-- Primary row -->
-        <div class="flex items-center gap-3 px-4 py-3 overflow-x-auto" style="-webkit-overflow-scrolling:touch;scrollbar-width:none">
-          <span class="material-symbols-outlined text-primary shrink-0" style="font-size:18px">schedule</span>
+      <div class="mb-4 glass-card border border-primary/10 rounded-sm">
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 sm:px-4 py-3">
           <div role="group" aria-label="Room scope" class="flex items-center shrink-0">
             <button id="rooms-all-btn" type="button" onclick="setSavedOnly(false)"
                     aria-pressed="true"
-                    class="px-3 py-1.5 text-label font-bold font-label uppercase tracking-widest border rounded-l-sm transition-all">
+                    class="min-h-[44px] px-4 text-xs font-bold font-label uppercase tracking-widest border rounded-l-sm transition-all">
               All
             </button>
             <button id="saved-rooms-btn" type="button" onclick="toggleSavedOnly()"
                     aria-pressed="false"
-                    class="px-3 py-1.5 text-label font-bold font-label uppercase tracking-widest border border-l-0 rounded-r-sm transition-all">
+                    class="min-h-[44px] px-4 text-xs font-bold font-label uppercase tracking-widest border border-l-0 rounded-r-sm transition-all">
               ★ Saved
             </button>
           </div>
-          <select id="day-filter"
-                  onchange="applyTimeFilter()"
-                  class="shrink-0 bg-surface-container border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">
-            <option value="">Today</option>
-            <option value="Monday">Monday</option>
-            <option value="Tuesday">Tuesday</option>
-            <option value="Wednesday">Wednesday</option>
-            <option value="Thursday">Thursday</option>
-            <option value="Friday">Friday</option>
-            <option value="Saturday">Saturday</option>
-            <option value="Sunday">Sunday</option>
-          </select>
-          <span class="text-label font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap shrink-0">Free at</span>
-          <input type="time" id="time-filter-at"
-                 class="shrink-0 bg-transparent border border-outline-variant/30 text-primary text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none"
-                 style="color-scheme:dark"/>
-          <span class="text-label font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap shrink-0">for at least</span>
-          <select id="time-filter-for"
-                  class="shrink-0 bg-surface-container border border-outline-variant/30 text-white text-xs font-label px-2 py-1 rounded-sm focus:border-primary/50 focus:outline-none">
-            <option value="0">Any duration</option>
-            <option value="30">30 min</option>
-            <option value="60">1 hour</option>
-            <option value="90">1.5 hrs</option>
-            <option value="120">2 hrs</option>
-            <option value="180">3 hrs</option>
-          </select>
-          <button onclick="applyTimeFilter()"
-                  class="shrink-0 px-4 py-1.5 text-label font-bold bg-primary/10 border border-primary/30 text-primary rounded-sm uppercase tracking-widest hover:bg-primary/20 transition-all">
-            Apply
-          </button>
-          <button onclick="resetTimeFilter()"
-                  class="shrink-0 px-3 py-1.5 text-label font-bold text-on-surface-variant border border-outline-variant/20 rounded-sm uppercase tracking-widest hover:text-white transition-all">
-            Reset
-          </button>
-          <button onclick="toggleFilterMore()" id="filter-more-btn"
-                  class="shrink-0 flex items-center gap-1 px-3 py-1.5 text-label font-bold font-label uppercase tracking-widest border border-outline-variant/20 text-on-surface-variant rounded-sm hover:text-white hover:border-outline-variant/50 transition-all ml-auto">
-            <span class="material-symbols-outlined" style="font-size:13px">tune</span>
-            Filters
-          </button>
-          <span id="time-filter-indicator"
-                class="hidden shrink-0 px-2 py-0.5 bg-tertiary/20 border border-tertiary/30 text-tertiary text-label font-bold font-label tracking-wider rounded-sm">
-            CUSTOM TIME
-          </span>
-        </div>
-        <!-- Secondary row (hidden by default) -->
-        <div id="filter-secondary" style="display:none" class="flex flex-wrap items-center gap-3 px-4 py-3 border-t border-outline-variant/10">
-          <span class="text-label font-label text-on-surface-variant uppercase tracking-widest whitespace-nowrap">Closing soon if</span>
-          <select
-            id="soon-threshold-select"
-            onchange="applyThreshold()"
-            class="bg-surface-container border border-outline-variant/30 text-white text-xs font-label px-2 py-1.5 rounded-sm focus:outline-none focus:border-primary/60"
-          >
-            <option value="15">≤ 15 min</option>
-            <option value="30" selected>≤ 30 min</option>
-            <option value="45">≤ 45 min</option>
-            <option value="60">≤ 60 min</option>
-          </select>
-          <button
-            onclick="copyShareLink()"
-            id="copy-link-btn"
-            class="flex items-center gap-1.5 px-3 py-1.5 text-label font-bold font-label uppercase tracking-widest border border-outline-variant/30 text-on-surface-variant rounded-sm hover:border-primary/40 hover:text-primary transition-all"
-          >
-            <span class="material-symbols-outlined" style="font-size:14px">link</span>
+          <div class="flex items-center gap-2 min-w-0 flex-1 basis-full sm:basis-0 order-last sm:order-none">
+            <span class="material-symbols-outlined text-primary shrink-0" aria-hidden="true" style="font-size:18px">schedule</span>
+            <p id="applied-query" class="min-w-0 text-sm font-label text-white leading-snug break-words">Loading filters…</p>
+            <span id="time-filter-indicator"
+                  class="hidden shrink-0 px-2 py-0.5 bg-tertiary/20 border border-tertiary/30 text-tertiary text-xs font-bold font-label tracking-wider rounded-sm">
+              CUSTOM TIME
+            </span>
+          </div>
+          <button type="button" onclick="copyShareLink()" id="copy-link-btn"
+                  class="min-h-[44px] flex items-center gap-1.5 px-3 text-xs font-bold font-label uppercase tracking-widest border border-outline-variant/30 text-on-surface-variant rounded-sm hover:border-primary/40 hover:text-primary transition-all">
+            <span class="material-symbols-outlined" aria-hidden="true" style="font-size:16px">link</span>
             <span id="copy-link-label">Share</span>
           </button>
-          <button id="free-all-day-btn"
-                  onclick="toggleFreeAllDay()"
-                  class="whitespace-nowrap px-3 py-1.5 text-label font-bold font-label uppercase tracking-widest border border-outline-variant/30 text-on-surface-variant rounded-sm hover:border-primary/40 hover:text-primary transition-all">
-            Free All Day
+          <button type="button" onclick="toggleFilterMore()" id="filter-more-btn" aria-haspopup="dialog"
+                  class="min-h-[44px] flex items-center gap-1.5 px-4 text-xs font-bold font-label uppercase tracking-widest border border-primary/40 bg-primary/10 text-primary rounded-sm hover:bg-primary/20 transition-all ml-auto sm:ml-0">
+            <span class="material-symbols-outlined" aria-hidden="true" style="font-size:16px">tune</span>
+            Filters
           </button>
         </div>
       </div>
@@ -462,7 +420,7 @@
         <span class="material-symbols-outlined text-on-surface-variant text-xl">event_busy</span>
         <div>
           <div class="text-xs font-headline font-bold text-white">No classes scheduled — <span id="no-classes-banner-day">today</span></div>
-          <div class="text-label text-on-surface-variant font-label mt-0.5">All rooms are available. Use the day filter above to check a weekday.</div>
+          <div class="text-label text-on-surface-variant font-label mt-0.5">Based on the class schedule; room access isn't guaranteed.</div>
         </div>
       </div>
 
@@ -476,7 +434,7 @@
     <div id="map-container" class="absolute inset-0 z-0"></div>
     <div class="absolute top-0 left-0 right-0 z-10 flex items-center justify-between px-6 py-3 bg-gradient-to-b from-[#080808]/90 to-transparent pointer-events-none">
       <div>
-        <div class="text-label text-primary font-label tracking-widest uppercase mb-0.5">Campus Map · Real Time</div>
+        <div class="text-label text-primary font-label tracking-widest uppercase mb-0.5" data-live-label>Campus Map · Schedule</div>
         <div class="text-sm font-headline font-bold text-white">Click a building to view floor plan</div>
       </div>
       <div class="flex items-center gap-4 text-label font-label text-on-surface-variant uppercase tracking-wider pointer-events-auto">
@@ -519,7 +477,7 @@
             <div id="si-rooms" class="text-2xl font-headline font-bold text-white">--</div>
           </div>
           <div class="px-5 py-5">
-            <div class="text-label text-on-surface-variant font-label tracking-widest uppercase mb-1">Last Updated</div>
+            <div class="text-label text-on-surface-variant font-label tracking-widest uppercase mb-1">Imported</div>
             <div id="si-loaded" class="text-xs font-label font-bold text-primary leading-tight mt-1">--</div>
           </div>
         </div>
@@ -566,14 +524,14 @@
           </div>
 
           <!-- Status message -->
-          <div id="upload-status" class="hidden px-4 py-3 rounded-sm text-xs font-label font-bold tracking-wide"></div>
+          <div id="upload-status" role="status" class="hidden px-4 py-3 rounded-sm text-xs font-label font-bold tracking-wide"></div>
 
-          <!-- Admin password (only needed when deployed with UPLOAD_PASSWORD set) -->
+          <!-- Transient upload/export credential; never stored by this application. -->
           <div>
-            <label class="text-label font-label text-on-surface-variant uppercase tracking-widest block mb-2">
-              Admin Password <span class="text-on-surface-variant/40 normal-case tracking-normal">(required on live server)</span>
+            <label for="upload-password" class="text-label font-label text-on-surface-variant uppercase tracking-widest block mb-2">
+              Upload Password <span class="text-on-surface-variant/40 normal-case tracking-normal">(required for upload and export)</span>
             </label>
-            <input id="upload-password" type="password" placeholder="Leave blank if running locally"
+            <input id="upload-password" type="password" placeholder="Enter the configured upload password" autocomplete="off"
                    class="w-full bg-[#0e0e0e] border border-outline-variant/30 text-white text-xs font-label px-3 py-2.5 rounded-sm focus:border-primary/50 focus:outline-none placeholder:text-on-surface-variant/30"/>
           </div>
 
@@ -582,6 +540,10 @@
                   class="w-full py-3 bg-primary/10 border border-primary/20 text-primary/40 font-headline font-bold text-sm uppercase tracking-widest rounded-sm transition-all cursor-not-allowed">
             Upload &amp; Apply Schedule
           </button>
+          <label for="export-term" class="text-xs text-on-surface-variant">Stored semester to export</label>
+          <select id="export-term" disabled class="w-full border border-primary/30 px-3 py-2 rounded-sm" style="background:var(--raised);color:var(--text);color-scheme:dark"></select>
+          <div id="export-term-status" class="text-xs text-on-surface-variant">Stored semesters not loaded.</div>
+          <button id="export-btn" type="button" onclick="exportSchedule()" class="w-full py-3 text-primary border border-primary/30 rounded-sm">Export Schedule</button>
 
         </div>
       </div>
@@ -613,12 +575,12 @@
     <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-primary"></span><span id="footer-semester">–</span></div>
     <div class="flex items-center gap-2"><span class="text-outline">Last sync:</span><span id="footer-sync" class="text-primary">--:--</span></div>
   </div>
-  <div class="text-label font-label text-primary font-bold tracking-widest uppercase italic">NJIT Room Finder · Live</div>
+  <div class="text-label font-label text-primary font-bold tracking-widest uppercase italic">NJIT Room Finder · Schedule</div>
 </footer>
 
 
 <!-- ═══ BUILDING PANEL (global fixed, slides in from right) ═══ -->
-<div id="floor-panel" class="fixed top-16 bottom-0 right-0 bg-[#080808] border-l border-primary/20 flex flex-col" style="width:460px;max-width:100%;transform:translateX(100%);transition:transform 0.35s cubic-bezier(0.4,0,0.2,1);z-index:9999">
+<div id="floor-panel" role="dialog" aria-modal="true" aria-hidden="true" inert class="fixed top-16 bottom-0 right-0 bg-[#080808] border-l border-primary/20 flex flex-col" style="width:460px;max-width:100%;transform:translateX(100%);transition:transform 0.35s cubic-bezier(0.4,0,0.2,1);z-index:9999">
   <!-- Header -->
   <div class="flex items-center justify-between px-5 py-4 border-b border-primary/10 bg-black/50 flex-shrink-0">
     <div class="flex items-center gap-3">
@@ -626,13 +588,18 @@
         <span class="material-symbols-outlined text-primary text-lg">apartment</span>
       </div>
       <div>
-        <div class="text-label text-primary font-label tracking-[0.25em] uppercase mb-0.5">Building // Live</div>
+        <div class="text-label text-primary font-label tracking-[0.25em] uppercase mb-0.5" data-live-label>Building schedule</div>
         <div id="panel-building" class="text-2xl font-headline font-black text-white leading-none">--</div>
       </div>
     </div>
     <button onclick="closeFloorPanel()" aria-label="Close building panel" class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
       <span class="material-symbols-outlined text-xl">close</span>
     </button>
+  </div>
+  <div class="px-4 py-2 border-b border-primary/10 text-xs text-on-surface-variant">
+    <div data-surface-status>Loading schedule…</div>
+    <button type="button" data-surface-retry onclick="refresh()" class="hidden px-4 py-2 text-primary">Retry</button>
+    <button type="button" data-surface-edit onclick="editQueryFilters()" class="hidden px-4 py-2 text-primary">Edit filters</button>
   </div>
   <!-- Stats -->
   <div class="grid grid-cols-3 divide-x divide-primary/10 border-b border-primary/10 flex-shrink-0">
@@ -675,52 +642,125 @@
   </div>
 </div>
 
+<!-- ═══ FILTER SHEET ═══ -->
+<div id="filter-sheet" role="dialog" aria-modal="true" aria-labelledby="filter-sheet-title" aria-hidden="true"
+     class="hidden fixed inset-0 z-[9999] flex items-end sm:items-center justify-center">
+  <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" onclick="closeFilterSheet()"></div>
+  <div class="relative w-full sm:max-w-lg bg-[#080808] border border-primary/20 rounded-t-2xl sm:rounded-sm flex flex-col" style="max-height:92vh">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-primary/10 flex-shrink-0">
+      <h2 id="filter-sheet-title" class="text-xl font-headline font-black text-white">Availability filters</h2>
+      <button type="button" onclick="closeFilterSheet()" aria-label="Close filters" class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 rounded-sm">
+        <span class="material-symbols-outlined" aria-hidden="true">close</span>
+      </button>
+    </div>
+    <form class="flex-1 overflow-y-auto px-5 py-4 space-y-4" onsubmit="event.preventDefault();applyTimeFilter()">
+      <div>
+        <label for="day-filter" class="block text-sm font-label text-on-surface-variant mb-1">Day</label>
+        <select id="day-filter" class="w-full min-h-[44px] bg-surface-container border border-outline-variant/30 text-white text-base font-label px-3 rounded-sm focus:border-primary/50 focus:outline-none">
+          <option value="">Today</option>
+          <option value="Monday">Monday</option>
+          <option value="Tuesday">Tuesday</option>
+          <option value="Wednesday">Wednesday</option>
+          <option value="Thursday">Thursday</option>
+          <option value="Friday">Friday</option>
+          <option value="Saturday">Saturday</option>
+          <option value="Sunday">Sunday</option>
+        </select>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label for="time-filter-at" class="block text-sm font-label text-on-surface-variant mb-1">Start time Eastern</label>
+          <input type="time" id="time-filter-at" class="w-full min-h-[44px] bg-transparent border border-outline-variant/30 text-primary text-base font-label px-3 rounded-sm focus:border-primary/50 focus:outline-none" style="color-scheme:dark"/>
+        </div>
+        <div>
+          <label for="time-filter-until" class="block text-sm font-label text-on-surface-variant mb-1">End time Eastern</label>
+          <input id="time-filter-until" type="time" class="w-full min-h-[44px] bg-transparent border border-outline-variant/30 text-primary text-base font-label px-3 rounded-sm focus:border-primary/50 focus:outline-none" style="color-scheme:dark"/>
+        </div>
+      </div>
+      <div>
+        <label for="time-filter-for" class="block text-sm font-label text-on-surface-variant mb-1">Minimum free duration <span class="text-xs">(ignored if end time is set)</span></label>
+        <select id="time-filter-for" class="w-full min-h-[44px] bg-surface-container border border-outline-variant/30 text-white text-base font-label px-3 rounded-sm focus:border-primary/50 focus:outline-none">
+          <option value="0">Any duration</option>
+          <option value="30">30 min</option>
+          <option value="60">1 hour</option>
+          <option value="90">1.5 hrs</option>
+          <option value="120">2 hrs</option>
+          <option value="180">3 hrs</option>
+        </select>
+      </div>
+      <div>
+        <label for="soon-threshold-select" class="block text-sm font-label text-on-surface-variant mb-1">Closing soon if</label>
+        <select id="soon-threshold-select" class="w-full min-h-[44px] bg-surface-container border border-outline-variant/30 text-white text-base font-label px-3 rounded-sm focus:outline-none focus:border-primary/60">
+          <option value="15">≤ 15 min</option>
+          <option value="30" selected>≤ 30 min</option>
+          <option value="45">≤ 45 min</option>
+          <option value="60">≤ 60 min</option>
+        </select>
+      </div>
+      <label for="filter-free-all-day" class="flex items-center gap-3 min-h-[44px] text-sm font-label text-white cursor-pointer">
+        <input id="filter-free-all-day" type="checkbox" class="w-5 h-5 accent-[#3fff8b]"/>
+        No more scheduled classes today
+      </label>
+      <div id="filter-error" role="alert" class="text-sm text-secondary min-h-[1.25rem]"></div>
+      <button type="submit" class="hidden" tabindex="-1" aria-hidden="true"></button>
+    </form>
+    <div class="flex gap-3 px-5 py-3 border-t border-primary/10 flex-shrink-0" style="padding-bottom:max(0.75rem, env(safe-area-inset-bottom))">
+      <!-- One-word visible labels: the full names wrap onto two lines in a
+           third of a 390px sheet. aria-label keeps the accessible name, which
+           still contains the visible word (WCAG 2.5.3). -->
+      <button type="button" onclick="resetTimeFilter()" aria-label="Reset draft" class="flex-1 min-h-[44px] px-2 text-sm font-bold font-label tracking-wide text-on-surface-variant border border-outline-variant/30 rounded-sm hover:text-white">Reset</button>
+      <button type="button" onclick="closeFilterSheet()" aria-label="Cancel filters" class="flex-1 min-h-[44px] px-2 text-sm font-bold font-label tracking-wide text-on-surface-variant border border-outline-variant/30 rounded-sm hover:text-white">Cancel</button>
+      <button type="button" onclick="applyTimeFilter()" aria-label="Apply filters" class="flex-1 min-h-[44px] px-2 text-sm font-bold font-label tracking-wide bg-primary text-on-primary rounded-sm hover:opacity-90">Apply</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ ROOM DETAIL SHEET (slides up from bottom) ═══ -->
 <div id="room-detail-backdrop" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9998] hidden" onclick="closeRoomDetail()"></div>
-<div id="room-detail-sheet"
-     class="fixed inset-x-0 bottom-0 bg-[#080808] border-t border-primary/20 flex flex-col z-[9999]"
+<div id="room-detail-sheet" role="dialog" aria-modal="true" aria-hidden="true" inert
+     class="fixed inset-x-0 bottom-0 mx-auto w-full max-w-2xl bg-[#080808] border-t md:border border-primary/20 md:rounded-t-xl flex flex-col z-[9999]"
      style="height:78vh;transform:translateY(100%);transition:transform 0.35s cubic-bezier(0.4,0,0.2,1)">
   <!-- Drag handle -->
   <div class="flex justify-center pt-3 pb-1 flex-shrink-0 cursor-pointer" onclick="closeRoomDetail()">
     <div class="w-10 h-1 bg-outline-variant/40 rounded-full"></div>
   </div>
   <!-- Header -->
-  <div class="flex items-center justify-between px-5 py-3 border-b border-primary/10 flex-shrink-0">
-    <div>
-      <div id="rds-building" class="text-label text-primary font-label tracking-[0.25em] uppercase mb-0.5">--</div>
-      <div class="flex items-baseline gap-3">
-        <div id="rds-room" class="text-3xl font-headline font-black text-white leading-none">--</div>
-        <div id="rds-capacity" class="text-label font-label text-on-surface-variant hidden"></div>
+  <div class="flex items-start gap-2 px-5 py-3 border-b border-primary/10 flex-shrink-0">
+    <div class="min-w-0 flex-1">
+      <div id="rds-building" class="text-xs text-primary font-label tracking-[0.2em] uppercase mb-0.5">--</div>
+      <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <div id="rds-room" class="text-3xl font-headline font-black text-white leading-none whitespace-nowrap">--</div>
+        <div id="rds-status" class="px-3 py-1 rounded-sm text-xs font-bold font-label tracking-wider uppercase"></div>
+        <div id="rds-capacity" class="text-sm font-label text-on-surface-variant hidden"></div>
       </div>
     </div>
-    <div class="flex items-center gap-3">
-      <div id="rds-status" class="px-3 py-1 rounded-sm text-label font-bold font-label tracking-wider uppercase"></div>
+    <div class="flex items-center shrink-0 -mr-2">
       <button id="rds-pin" onclick="toggleDetailPin()" title="Pin this room" aria-pressed="false"
               class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-all rounded-sm">
-        <span id="rds-pin-icon" class="material-symbols-outlined text-lg">star</span>
+        <span id="rds-pin-icon" class="material-symbols-outlined text-lg" aria-hidden="true">star</span>
       </button>
-      <button onclick="copyRoomLink()" title="Copy link to this room"
+      <button onclick="copyRoomLink()" title="Copy link to this room" aria-label="Copy link to this room"
               class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-primary hover:bg-primary/10 transition-all rounded-sm">
-        <span id="rds-share-icon" class="material-symbols-outlined text-lg">link</span>
+        <span id="rds-share-icon" class="material-symbols-outlined text-lg" aria-hidden="true">link</span>
       </button>
       <button onclick="closeRoomDetail()" aria-label="Close room detail" class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
-        <span class="material-symbols-outlined">close</span>
+        <span class="material-symbols-outlined" aria-hidden="true">close</span>
       </button>
     </div>
   </div>
+  <div class="px-4 py-2 border-b border-primary/10 text-xs text-on-surface-variant">
+    <div data-surface-status>Loading schedule…</div>
+    <button type="button" data-surface-retry onclick="refresh()" class="hidden px-4 py-2 text-primary">Retry</button>
+    <button type="button" data-surface-edit onclick="editQueryFilters()" class="hidden px-4 py-2 text-primary">Edit filters</button>
+  </div>
   <!-- Meta -->
-  <div class="flex items-center justify-between px-5 py-2 border-b border-primary/5 flex-shrink-0">
+  <!-- Stacked on separate lines: side by side, the two labels collide on narrow screens. -->
+  <div class="flex flex-col gap-y-1 px-5 py-2 border-b border-primary/5 flex-shrink-0">
     <div id="rds-day" class="text-label font-label text-on-surface-variant uppercase tracking-widest"></div>
     <div id="rds-summary" class="text-label font-label text-primary"></div>
   </div>
   <!-- Scrollable content -->
   <div class="flex-1 overflow-y-auto px-5 py-4" style="scrollbar-width:thin;scrollbar-color:rgba(63,255,139,0.15) transparent">
-    <!-- Timeline bar -->
-    <div class="relative h-7 bg-surface-container rounded-sm mb-1 overflow-hidden" id="rds-timeline"></div>
-    <!-- Time axis labels -->
-    <div class="flex justify-between text-[8px] font-label text-on-surface-variant mb-5 px-0.5">
-      <span>7AM</span><span>10AM</span><span>1PM</span><span>4PM</span><span>7PM</span><span>10PM</span>
-    </div>
     <!-- Next free window banner -->
     <div id="room-free-window" class="hidden mb-4 px-4 py-3 bg-primary/10 border border-primary/30 rounded-sm flex items-center gap-3">
       <span class="material-symbols-outlined text-primary text-xl">schedule</span>
@@ -729,13 +769,20 @@
         <div id="room-free-window-text" class="text-sm font-headline font-bold text-primary"></div>
       </div>
     </div>
+    <h3 class="text-xs font-label text-on-surface-variant uppercase tracking-widest mb-2">Today’s schedule</h3>
+    <!-- Timeline bar -->
+    <div class="relative h-7 bg-surface-container rounded-sm mb-1 overflow-hidden" id="rds-timeline"></div>
+    <!-- Time axis labels -->
+    <div class="flex justify-between text-xs font-label text-on-surface-variant mb-5 px-0.5">
+      <span>7AM</span><span>10AM</span><span>1PM</span><span>4PM</span><span>7PM</span><span>10PM</span>
+    </div>
     <!-- Schedule list -->
     <div id="rds-list" class="space-y-2"></div>
   </div>
 </div>
 
 <!-- ═══ FIND ME A ROOM MODAL ═══ -->
-<div id="find-room-modal" class="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center hidden">
+<div id="find-room-modal" role="dialog" aria-modal="true" aria-label="Find Me a Room" aria-hidden="true" class="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center hidden">
   <div class="absolute inset-0 bg-black/70 backdrop-blur-sm" onclick="closeFindRoom()"></div>
   <div class="relative w-full sm:max-w-lg bg-[#080808] border border-primary/20 rounded-t-2xl sm:rounded-sm flex flex-col" style="max-height:88vh">
     <!-- Handle (mobile) -->
@@ -745,13 +792,18 @@
     <!-- Header -->
     <div class="flex items-center justify-between px-5 py-4 border-b border-primary/10 flex-shrink-0">
       <div>
-        <div class="text-label text-primary font-label tracking-[0.25em] uppercase mb-0.5">Right Now · Best Available</div>
+        <div class="text-label text-primary font-label tracking-[0.25em] uppercase mb-0.5" data-live-label>Available rooms</div>
         <div class="text-xl font-headline font-black text-white">Find Me a Room</div>
       </div>
       <button onclick="closeFindRoom()" aria-label="Close find a room" class="w-11 h-11 flex items-center justify-center text-on-surface-variant hover:text-white hover:bg-white/10 transition-all rounded-sm">
         <span class="material-symbols-outlined">close</span>
       </button>
     </div>
+  <div class="px-4 py-2 border-b border-primary/10 text-xs text-on-surface-variant">
+    <div data-surface-status>Loading schedule…</div>
+    <button type="button" data-surface-retry onclick="refresh()" class="hidden px-4 py-2 text-primary">Retry</button>
+    <button type="button" data-surface-edit onclick="editQueryFilters()" class="hidden px-4 py-2 text-primary">Edit filters</button>
+  </div>
     <!-- Sort mode: most free time vs. closest to me -->
     <div class="px-4 py-3 border-b border-primary/10 flex-shrink-0">
       <div class="flex items-center gap-2">
@@ -775,10 +827,10 @@
     <div class="px-4 py-3 border-b border-primary/10 flex-shrink-0">
       <div class="text-label font-headline font-bold text-on-surface-variant uppercase tracking-[0.12em] mb-2">Free during my gap</div>
       <div class="flex items-center gap-2">
-        <input id="fr-gap-from" type="time"
+        <input id="fr-gap-from" type="time" aria-label="Gap start time Eastern"
                class="flex-1 bg-surface-container border border-outline-variant/30 rounded-sm px-2 py-1.5 text-xs text-white font-label focus:border-primary focus:ring-0"/>
         <span class="text-on-surface-variant text-label font-label flex-shrink-0">to</span>
-        <input id="fr-gap-until" type="time"
+        <input id="fr-gap-until" type="time" aria-label="Gap end time Eastern"
                class="flex-1 bg-surface-container border border-outline-variant/30 rounded-sm px-2 py-1.5 text-xs text-white font-label focus:border-primary focus:ring-0"/>
         <button onclick="applyGapWindow()"
                 class="flex-shrink-0 px-3 py-1.5 bg-primary text-on-primary font-headline font-bold text-label uppercase tracking-[0.1em] rounded-sm hover:brightness-110 transition-all">
@@ -789,6 +841,7 @@
           ✕
         </button>
       </div>
+      <div id="fr-gap-error" role="alert" class="text-xs text-secondary mt-2"></div>
       <div id="fr-gap-label" class="hidden text-label text-primary font-label mt-2"></div>
     </div>
     <!-- Results list -->
@@ -860,5 +913,6 @@
 </div>
 
 <script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/reliability.js"></script>
 <script src="/static/app.js"></script>
 </body></html>
