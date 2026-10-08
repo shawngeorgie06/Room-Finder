@@ -69,8 +69,24 @@ class TestParseLocation:
 
 
 class TestLoadSchedule:
+    @pytest.fixture(autouse=True)
+    def single_term_workbook(self, tmp_path):
+        from openpyxl import Workbook
+        self.xlsx_path = tmp_path / 'single-term.xlsx'
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.append(['Term', 'Days', 'Times', 'Location', 'Max', 'Delivery Mode'])
+        worksheet.append([202690, 'MW', '9:00 AM - 10:00 AM', 'CKB G-08', 40, 'Face-to-Face'])
+        worksheet.append([202690, 'TR', '1:00 PM - 2:20 PM', 'CULM LECT 2', None, 'Hybrid'])
+        workbook.save(self.xlsx_path)
+
     def _xlsx(self):
-        return os.path.join(os.path.dirname(__file__), "..", "Course_Schedule_All_Subjects.xlsx")
+        return self.xlsx_path
+
+    def test_bundled_mixed_term_workbook_is_rejected(self):
+        path = os.path.join(os.path.dirname(__file__), '..', 'Course_Schedule_All_Subjects.xlsx')
+        with pytest.raises(ValueError, match='mixed terms'):
+            load_schedule(path)
 
     def test_returns_list(self):
         if not os.path.exists(self._xlsx()):

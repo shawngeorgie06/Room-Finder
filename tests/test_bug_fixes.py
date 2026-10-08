@@ -12,7 +12,10 @@ FAKE_SCHEDULE = [
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch, tmp_path):
+    monkeypatch.setattr('app.UPLOAD_FOLDER', str(tmp_path))
+    monkeypatch.delenv('SCHEDULE_STORAGE_DIR', raising=False)
+    monkeypatch.setenv('UPLOAD_PASSWORD', 'test-upload-secret')
     app = create_app(schedule=list(FAKE_SCHEDULE))
     app.config["TESTING"] = True
     with app.test_client() as c:
@@ -60,7 +63,7 @@ class TestUploadValidation:
         bad_csv = io.BytesIO(b"Term,Course,Days,Times,Location,Max,Delivery Mode\n")
         resp = client.post(
             "/api/upload-schedule",
-            data={"file": (bad_csv, "empty.csv")},
+            data={"file": (bad_csv, "empty.csv"), "password": "test-upload-secret"},
             content_type="multipart/form-data",
         )
         assert resp.status_code == 422
@@ -75,18 +78,18 @@ class TestUploadValidation:
         )
         resp = client.post(
             "/api/upload-schedule",
-            data={"file": (good_csv, "Course_Schedule_202650.csv")},
+            data={"file": (good_csv, "Course_Schedule_202650.csv"), "password": "test-upload-secret"},
             content_type="multipart/form-data",
         )
         assert resp.status_code == 200
         assert resp.get_json()["entries"] == 1
-        # Saved under a term-suffixed name (term 202650 read from the data)
-        assert os.path.exists(os.path.join(str(tmp_path), "uploaded_schedule_202650.csv"))
+        # Logical term names point to committed immutable original-format bytes.
+        from schedule_store import published_records
+        record = published_records(tmp_path)['uploaded_schedule_202650.csv']
+        assert os.path.exists(record.path)
 
-    def test_upload_removes_superseded_files(self, client, tmp_path, monkeypatch):
-        # Legacy un-termed uploads and the same term's other extension are
-        # superseded by a successful upload and must be removed — they would
-        # outrank or shadow it in the restart load order.
+    def test_upload_preserves_historical_files(self, client, tmp_path, monkeypatch):
+        # New published records outrank historical files without deleting them.
         monkeypatch.setattr("app.UPLOAD_FOLDER", str(tmp_path))
         legacy = os.path.join(str(tmp_path), "uploaded_schedule.xlsx")
         same_term_xlsx = os.path.join(str(tmp_path), "uploaded_schedule_202650.xlsx")
@@ -99,12 +102,14 @@ class TestUploadValidation:
         )
         resp = client.post(
             "/api/upload-schedule",
-            data={"file": (good_csv, "Course_Schedule_202650.csv")},
+            data={"file": (good_csv, "Course_Schedule_202650.csv"), "password": "test-upload-secret"},
             content_type="multipart/form-data",
         )
         assert resp.status_code == 200
-        assert not os.path.exists(legacy)
-        assert not os.path.exists(same_term_xlsx)
+        assert os.path.exists(legacy)
+        assert os.path.exists(same_term_xlsx)
+        assert client.get('/api/export-schedule?term=202650',
+                          headers={'Authorization': 'Bearer test-upload-secret'}).data.startswith(b'Term,Course')
 
 
 class TestUploadCORS:
@@ -128,7 +133,7 @@ class TestUploadCORS:
         )
         resp = client.post(
             "/api/upload-schedule",
-            data={"file": (good_csv, "Course_Schedule_202650.csv")},
+            data={"file": (good_csv, "Course_Schedule_202650.csv"), "password": "test-upload-secret"},
             content_type="multipart/form-data",
         )
         assert resp.status_code == 200

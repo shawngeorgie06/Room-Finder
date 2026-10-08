@@ -193,9 +193,9 @@
         <div class="step">
           <div class="step-num">5</div>
           <div class="step-text">
-            That's it — the schedule is <strong>uploaded to the app automatically</strong>.
-            If the app has an admin password set, you'll be asked for it once (it's remembered after that).
-            If the upload can't reach the app, the CSV downloads instead and you can add it manually via the
+            Enter the <strong>Room Finder upload password</strong> when prompted to send the schedule directly to the app.
+            It is requested each time and is never saved. This is not your NJIT login or visitor-report password.
+            If you cancel, upload is disabled, or the request fails or times out, the CSV downloads instead for the
             <strong><a href="/?view=settings" target="_blank">Settings page</a></strong>.
           </div>
         </div>
@@ -213,7 +213,22 @@
         <strong style="color:var(--text)">What it does:</strong> The bookmarklet reads the full subject list from the already-loaded page,
         then loops through every subject — calling the same Excel export endpoint Banner uses —
         and combines all sections into one CSV. It runs entirely in your browser using your
-        existing authenticated session. No credentials are stored or transmitted anywhere else.
+        existing authenticated session. Your NJIT credentials stay with Banner. The upload password is sent
+        only to this Room Finder app over HTTPS and is not saved by this bookmarklet.
+        <br><br>
+        <strong style="color:var(--text)">Updating an old bookmarklet:</strong> Replace ALL old bookmarks
+        on every browser and device with the button above before entering a rotated secret.
+        Saved bookmarks do not update automatically, and old bookmarks can re-save the rotated secret
+        in Banner's local storage. On its next upload attempt, the new version removes the old saved upload
+        password when storage is accessible. If storage is blocked, clear that site's stored data manually.
+        An administrator should rotate any previously saved upload password after replacing the old bookmarks;
+        reinstalling or deleting local storage does not rotate it.
+        <br><br>
+        <strong style="color:var(--text)">Administrator deployment requirement:</strong> Use separate upload and
+        visitor-report secrets of at least 32 random printable-ASCII characters. Unsupported non-ASCII upload
+        secrets disable upload/export. Surrounding whitespace is ignored for the upload password.
+        The failed-credential response budget is not brute-force prevention: valid credentials are always
+        checked and can recover immediately. Use edge abuse protection as well as strong random secrets.
         <br><br>
         <strong style="color:var(--text)">Output columns:</strong>
         <code>Term, Course, Title, Section, CRN, Days, Times, Location, Status, Max, Now, Instructor, Delivery Mode, Credits, Info, Comments</code>
@@ -405,22 +420,28 @@ function download(){
   document.body.appendChild(a);a.click();document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
-function doUpload(pw){
+async function doUpload(pw){
   const fd=new FormData();
   fd.append("file",new Blob(["\\uFEFF"+csv],{type:"text/csv"}),fname);
-  if(pw)fd.append("password",pw);
-  return fetch(APP+"/api/upload-schedule",{method:"POST",body:fd});
+  fd.append("password",pw);
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),30000);
+  try{
+    return await fetch(APP+"/api/upload-schedule",{method:"POST",body:fd,signal:controller.signal,credentials:"omit",redirect:"error"});
+  }finally{clearTimeout(timeout);}
 }
+/* Best-effort deletion only: blocked storage must not prevent a transient upload. */
+try{localStorage.removeItem(PWKEY);}catch(e){}
 try{
-  let pw=localStorage.getItem(PWKEY)||"";
-  let resp=await doUpload(pw);
-  if(resp.status===401){
-    localStorage.removeItem(PWKEY);
-    pw=prompt("Room Finder admin password (to update "+APP+"):")||"";
-    if(pw)resp=await doUpload(pw);
+  let pw=prompt("Room Finder upload password (to update "+APP+"). Not saved:");
+  if(!pw){
+    download();
+    alert("Upload cancelled. Downloaded "+fname+"\\n"+summary);
+    return;
   }
+  const resp=await doUpload(pw);
+  pw="";
   if(resp.ok){
-    if(pw)localStorage.setItem(PWKEY,pw);
     const d=await resp.json().catch(()=>({}));
     const note=(d.uploaded_semester&&d.active_semester&&d.uploaded_semester!==d.active_semester)?"\\n\\nSaved "+d.uploaded_semester+" — the app currently shows "+d.active_semester+" and will switch automatically when the semester starts.":"";
     alert("Room Finder updated!\\n"+summary+"\\nEntries: "+(d.entries!=null?d.entries:"?")+note);
@@ -429,7 +450,7 @@ try{
   const err=await resp.json().catch(()=>({}));
   alert("Upload to "+APP+" failed ("+resp.status+"): "+(err.error||"unknown error")+"\\n\\nDownloading the CSV instead — upload it manually via Settings.");
 }catch(e){
-  alert("Could not reach "+APP+" — downloading the CSV instead.\\n("+e+")");
+  alert("Upload could not complete or timed out — downloading the CSV instead. Try again via Room Finder Settings.");
 }
 download();
 alert("Downloaded "+fname+"\\n"+summary);

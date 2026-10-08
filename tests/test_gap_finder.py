@@ -74,9 +74,8 @@ class TestRoomsAPIUntil:
         resp = client.get("/api/rooms?day=0&at=10:00&until=12:00")
         assert ("KUPF", "207") in [(r["building"], r["room"]) for r in resp.get_json()]
 
-    def test_invalid_until_ignored(self, client):
+    def test_invalid_until_rejected(self, client):
         with patch("app.get_current_time", return_value=(MONDAY, time(11, 30))):
             resp = client.get("/api/rooms?until=banana")
-        assert resp.status_code == 200
-        # falls back to instant check: room free at 11:30
-        assert ("KUPF", "207") in [(r["building"], r["room"]) for r in resp.get_json()]
+        assert resp.status_code == 400
+        assert resp.get_json()["error_code"] == "invalid_window"

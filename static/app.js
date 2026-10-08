@@ -51,10 +51,14 @@ function buildingLabel(code) {
 // ── State ──────────────────────────────────────────────────────────────────
 const state = {
   view: 'dashboard',
-  building: '',
-  timeAt: '',      // custom time for filter (HH:MM string, empty = now)
-  timeFor: 0,      // minimum free duration in minutes (0 = any)
-  dayAt: '',       // day override ('Monday'…'Sunday', empty = today)
+  query: Object.freeze({ building: '', day: '', at: '', for: 0, until: '' }),
+  snapshot: null,
+  requestState: 'loading',
+  requestError: '',
+  allRoomsCacheReady: false,
+  openBuilding: '',
+  detailData: null,
+  pendingRefresh: null,
   freeAllDay: false, // show only rooms free for rest of day
   savedOnly: false,   // Rooms view: show only pinned rooms
   soonThresholdMins: 30,  // configurable "busy soon" threshold in minutes
@@ -71,15 +75,147 @@ const state = {
   mapFloor: 1,
   floorRoomsData: [],
   lastRoomsData: [],   // most recent /api/rooms result, for pin re-renders
-  detailRoom: '',      // "BLDG-ROOM" while the detail sheet is open (deep link)
+  detailRoom: '',      // Legacy "BLDG-ROOM" share key
+  detailIdentity: null, // Exact original values for actions; never recover them from rendered markup
   userPos: null,       // {lat, lon} once the user opts into location
   frSort: 'time',      // Find Me a Room ranking: 'time' | 'distance'
   frLastRooms: [],     // last result set rendered in Find Me a Room
 };
 
+const reliability = RoomFinderReliability;
+const refreshGeneration = reliability.createGeneration();
+// Legacy call sites all address the same immutable committed query. Draft input
+// values are only read by Apply; these aliases do not maintain a second context.
+for (const [alias, key] of Object.entries({ building: 'building', dayAt: 'day', timeAt: 'at', timeFor: 'for', timeUntil: 'until' })) {
+  Object.defineProperty(state, alias, {
+    get: () => state.query[key],
+    set: value => { state.query = Object.freeze({ ...state.query, [key]: value }); },
+  });
+}
+
+// Shared modal stack. Keep launch identity rather than only a DOM reference:
+// periodic refresh can replace the launching room while its detail is open.
+const overlays = (() => {
+  const stack = [];
+  const blocked = new Map();
+  let overflow = '';
+  const top = () => stack[stack.length - 1];
+  const focusable = root => Array.from(root.querySelectorAll('button, input, select, textarea, a[href], [tabindex]'))
+    .filter(el => el.tabIndex >= 0 && !el.disabled && !el.closest('[inert]') && el.getClientRects().length);
+  function update() {
+    blocked.forEach((value, el) => { el.inert = value; });
+    blocked.clear();
+    const active = top();
+    stack.forEach((entry, index) => {
+      entry.root.style.zIndex = String(10000 + index * 2);
+      entry.root.setAttribute('aria-modal', String(entry === active));
+    });
+    if (!active) { document.body.style.overflow = overflow; return; }
+    // All dialogs are body children; exempt only the central announcement node
+    // and the active detail backdrop, never an underlying dialog.
+    for (const el of document.body.children) {
+      if (el === active.root || el.id === 'sr-status' || el.tagName === 'SCRIPT' ||
+          (active.root.id === 'room-detail-sheet' && el.id === 'room-detail-backdrop')) continue;
+      blocked.set(el, el.inert); el.inert = true;
+    }
+    active.root.inert = false;
+    const backdrop = $('room-detail-backdrop');
+    if (backdrop && active.root.id === 'room-detail-sheet') backdrop.style.zIndex = String(Number(active.root.style.zIndex) - 1);
+    document.body.style.overflow = 'hidden';
+  }
+  function open(id, dismiss, initial) {
+    const root = $(id);
+    if (!root || stack.some(entry => entry.root === root)) return;
+    if (!stack.length) overflow = document.body.style.overflow;
+    const launcher = document.activeElement;
+    stack.push({root, dismiss, launcher, key:launcher?.dataset?.focusKey});
+    root.setAttribute('aria-hidden', 'false'); root.inert = false;
+    root.tabIndex = -1;
+    update();
+    (root.querySelector(initial || '[data-initial-focus]') || focusable(root)[0] || root).focus({preventScroll:true});
+  }
+  function close(id) {
+    const index = stack.findIndex(entry => entry.root.id === id);
+    if (index < 0) return;
+    const wasTop = index === stack.length - 1;
+    const [entry] = stack.splice(index, 1);
+    update();
+    entry.root.setAttribute('aria-hidden', 'true'); entry.root.inert = true;
+    entry.root.removeAttribute('aria-modal');
+    if (!wasTop) return;
+    const target = entry.launcher?.isConnected ? entry.launcher : entry.key &&
+      Array.from(document.querySelectorAll('[data-focus-key]')).find(el => el.dataset.focusKey === entry.key);
+    if (target && !target.closest('[inert]') && target.getClientRects().length) target.focus({preventScroll:true});
+    else if (top()) (focusable(top().root)[0] || top().root).focus({preventScroll:true});
+    else $('filter-more-btn')?.focus({preventScroll:true});
+  }
+  document.addEventListener('keydown', event => {
+    const active = top();
+    if (!active) return;
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopImmediatePropagation(); active.dismiss();
+    } else if (event.key === 'Tab') {
+      const items = focusable(active.root), first = items[0], last = items[items.length - 1];
+      if (!first || !active.root.contains(document.activeElement) ||
+          (event.shiftKey && (document.activeElement === first || document.activeElement === active.root)) ||
+          (!event.shiftKey && document.activeElement === last)) {
+        event.preventDefault(); (event.shiftKey ? last : first)?.focus();
+        if (!first) active.root.focus();
+      }
+    }
+  }, true);
+  document.addEventListener('focusin', event => {
+    const active = top();
+    if (active && !active.root.contains(event.target)) (focusable(active.root)[0] || active.root).focus({preventScroll:true});
+  });
+  return {open, close, active:() => top()?.root.id};
+})();
+let filterDraftOpen = false;
+
+function commitQuery(query, errorId = 'query-error') {
+  const error = reliability.validateQuery(query);
+  setText(errorId, error);
+  if (error) { announce(error); return false; }
+  state.query = Object.freeze({ ...query });
+  syncQueryInputs();
+  syncURL();
+  refresh();
+  return true;
+}
+
+function editQueryFilters() {
+  closeRoomDetail();
+  closeFindRoom();
+  closeFloorPanel();
+  if (state.view !== 'rooms') switchView('rooms');
+  openFilterSheet();
+  const input = $(state.timeUntil ? 'time-filter-until' : state.timeFor ? 'time-filter-for' : 'time-filter-at');
+  input?.focus();
+  input?.scrollIntoView({block:'center', inline:'nearest'});
+}
+
+function syncQueryInputs() {
+  for (const [id, value] of Object.entries({ 'time-filter-at': state.timeAt, 'time-filter-for': state.timeFor,
+    'time-filter-until': state.timeUntil, 'day-filter': state.dayAt, 'fr-gap-from': state.timeAt, 'fr-gap-until': state.timeUntil })) {
+    if (filterDraftOpen && !id.startsWith('fr-gap-')) continue;
+    const el = $(id);
+    if (el) {
+      if (el.tagName === 'SELECT' && !Array.from(el.options).some(option => option.value === String(value))) {
+        const option = document.createElement('option'); option.value = String(value); option.textContent = `${value} min`; el.appendChild(option);
+      }
+      el.value = String(value);
+    }
+  }
+  $('time-filter-indicator')?.classList.toggle('hidden', !state.timeAt && !state.timeFor && !state.dayAt && !state.timeUntil);
+  $('fr-gap-clear')?.classList.toggle('hidden', !state.timeUntil);
+}
+
 // ── Pinned rooms (localStorage) ─────────────────────────────────────────────
 function getPins() {
-  try { return JSON.parse(localStorage.getItem('pinnedRooms') || '[]'); }
+  try {
+    const pins = JSON.parse(localStorage.getItem('pinnedRooms') || '[]');
+    return Array.isArray(pins) ? pins.filter(pin => typeof pin === 'string') : [];
+  }
   catch (e) { return []; }
 }
 function isPinned(b, r) { return getPins().includes(`${b}|${r}`); }
@@ -88,9 +224,8 @@ function togglePin(b, r) {
   let pins = getPins();
   pins = pins.includes(key) ? pins.filter(p => p !== key) : [...pins, key];
   localStorage.setItem('pinnedRooms', JSON.stringify(pins));
-  if (state.lastRoomsData.length) {
-    renderRoomsGrid(state.lastRoomsData);
-  }
+  preserveFocus(() => renderRoomsGrid(state.lastRoomsData));
+  renderDetailPin();
 }
 function pinSort(rooms) {
   // Stable sort: pinned rooms float to the top, original order kept otherwise
@@ -100,66 +235,45 @@ function pinSort(rooms) {
 
 // ── URL state sync ─────────────────────────────────────────────────────────
 function syncURL() {
-  const params = new URLSearchParams();
+  const params = reliability.queryParams(state.query, true);
   if (state.view && state.view !== 'dashboard') params.set('view', state.view);
-  if (state.building) params.set('building', state.building);
-  if (state.timeAt)   params.set('at', state.timeAt);
-  if (state.timeFor)  params.set('for', String(state.timeFor));
-  if (state.dayAt)    params.set('day', state.dayAt);
   if (state.freeAllDay) params.set('freeAllDay', '1');
   if (state.savedOnly) params.set('saved', '1');
   if (state.soonThresholdMins !== 30) params.set('soon', String(state.soonThresholdMins));
-  if (state.detailRoom) params.set('room', state.detailRoom);
+  if (state.detailRoom) {
+    params.set('room', state.detailRoom);
+    if (state.detailIdentity?.building.includes('-')) params.set('roomBuilding', state.detailIdentity.building);
+  }
   const newURL = params.toString() ? '?' + params.toString() : window.location.pathname;
   window.history.replaceState(null, '', newURL);
 }
 
 function restoreStateFromURL() {
   const params = new URLSearchParams(window.location.search);
-
-  let view       = params.get('view');
-  const building = params.get('building');
-  const at       = params.get('at');
-  const forMins  = params.get('for');
-  const day      = params.get('day');
-  const fad      = params.get('freeAllDay');
-  const saved    = params.get('saved');
-
-  if (building) state.building = building;
-  if (at)       state.timeAt   = at;
-  if (forMins)  state.timeFor  = parseInt(forMins) || 0;
-  if (day)    { state.dayAt = day; const sel = $('day-filter'); if (sel) sel.value = day; }
-  if (fad)    { state.freeAllDay = true; _updateFreeAllDayBtn(true); }
-  if (saved === '1') { state.savedOnly = true; updateSavedFilterButtons(); }
-
-  const soon = params.get('soon');
-  if (soon) {
-    state.soonThresholdMins = parseInt(soon) || 30;
-    const sel = $('soon-threshold-select');
-    if (sel) sel.value = String(state.soonThresholdMins);
+  let view = params.get('view');
+  state.query = reliability.readQuery(params);
+  setText('query-error', reliability.validateQuery(state.query));
+  syncQueryInputs();
+  state.freeAllDay = params.get('freeAllDay') === '1';
+  state.savedOnly = params.get('saved') === '1';
+  updateSavedFilterButtons();
+  const soon = Number(params.get('soon'));
+  if (Number.isFinite(soon) && soon > 0 && soon <= 1440) {
+    state.soonThresholdMins = soon;
+    if ($('soon-threshold-select')) $('soon-threshold-select').value = String(soon);
   }
-
-  // Restore time filter inputs so UI reflects the state
-  if (at && $('time-filter-at'))        $('time-filter-at').value  = at;
-  if (forMins && $('time-filter-for'))  $('time-filter-for').value = forMins;
-  if ((at || forMins || day) && $('time-filter-indicator')) {
-    $('time-filter-indicator').classList.remove('hidden');
-  }
-
-  // Switch to the saved view (must happen after DOM is ready)
-  // 'buildings' is the new name for the home view; 'dashboard' is kept so
-  // links shared before the redesign keep working.
+  // Preserve valid old view names and hyphenated room identifiers.
   if (view === 'buildings') view = 'dashboard';
-  if (view && ['dashboard','rooms','map','settings'].includes(view)) {
-    switchView(view);
-  }
-
-  // Deep link to a room: ?room=CKB-217 (split on the first dash —
-  // building codes never contain one, room numbers may)
   const roomLink = params.get('room');
-  if (roomLink) {
-    const i = roomLink.indexOf('-');
-    if (i > 0) setTimeout(() => openRoomDetail(roomLink.slice(0, i), roomLink.slice(i + 1)), 300);
+  if (roomLink && roomLink.indexOf('-') > 0) {
+    state.detailRoom = roomLink;
+    const building = params.get('roomBuilding');
+    if (building && roomLink.startsWith(building + '-')) state.detailIdentity = { key: roomLink, building, room: roomLink.slice(building.length + 1) };
+  }
+  if (view && ['dashboard','rooms','map','settings'].includes(view)) switchView(view);
+  if (state.detailRoom) {
+    const [building, room] = splitDetailRoom(state.detailRoom);
+    showRoomDetail(building, room);
   }
 }
 
@@ -179,6 +293,12 @@ function copyShareLink() {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function $(id) { return document.getElementById(id); }
+function textElement(tag, text, css = '') {
+  const el = document.createElement(tag);
+  el.textContent = text ?? '';
+  if (css) el.style.cssText = css;
+  return el;
+}
 
 // Room cards, floor tiles and pins are <div>/<span> with click handlers, which
 // keyboard and screen-reader users cannot reach at all. This makes one behave
@@ -203,10 +323,10 @@ function announce(msg) {
   if (el) el.textContent = msg;
 }
 function setText(id, val) { const e = $(id); if (e) e.textContent = val; }
-function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
 
 function formatTime(minutes) {
-  if (minutes === null || minutes === undefined) return 'FREE ALL DAY';
+  if (minutes === undefined) return 'Availability unknown';
+  if (minutes === null) return 'No more scheduled classes';
   if (minutes < 60) return `~${minutes}M`;
   const h = Math.floor(minutes / 60), m = minutes % 60;
   return m > 0 ? `${h}H ${m}M` : `${h}H`;
@@ -233,6 +353,8 @@ function isClosingSoon(room) {
 // place rather than being retyped at every call site.
 
 function roomStatus(room) {
+  if (room.availabilityUnknown) return { kind: 'unknown', text: 'Availability unknown', cssVar: 'var(--muted)' };
+  if (room.missingFromSchedule) return { kind: 'unknown', text: 'Not in current schedule', cssVar: 'var(--muted)' };
   if (room.empty === false) {
     return { kind: 'busy', text: 'In use', cssVar: 'var(--busy)' };
   }
@@ -265,7 +387,7 @@ function groupLabel(text) {
 
 // ── Clock ──────────────────────────────────────────────────────────────────
 function updateClock() {
-  const t = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  const t = new Date().toLocaleTimeString([], { timeZone: 'America/New_York', hour:'2-digit', minute:'2-digit', second:'2-digit' });
   setText('hdr-clock', t);
 }
 updateClock();
@@ -314,7 +436,7 @@ function switchView(view) {
   });
   if (view === 'map')       initMap();
   if (view === 'dashboard') showHomeHeroMap();
-  if (view === 'settings')  fetchScheduleInfo();
+  if (view === 'settings') { fetchScheduleInfo(); loadExportTerms().catch(() => {}); }
   syncURL();
 }
 
@@ -347,7 +469,7 @@ function renderBuildingsGrid(buildings) {
     const empty = document.createElement('div');
     empty.className = 'label';
     empty.style.cssText = 'color:var(--muted);padding:32px 4px;text-align:center';
-    empty.textContent = 'No buildings have free rooms right now';
+    empty.textContent = 'No buildings have free rooms in this query';
     container.appendChild(empty);
     return;
   }
@@ -362,12 +484,11 @@ function renderBuildingsGrid(buildings) {
       'border-radius:10px;text-align:left;cursor:pointer';
     card.addEventListener('click', () => openBuildingPanel(b));
 
-    const freePct = b.total_rooms ? Math.round(b.empty_rooms / b.total_rooms * 100) : 0;
     // Show the distance when we have one — a list sorted by a key the reader
     // cannot see is hard to trust. But suppress it when the fix is too coarse
     // to rank with: printing "304 m" off a +/-400 m fix claims a precision we
     // just told the user we do not have.
-    const usable = state.userPos && locationQuality(state.userPos.accuracy).tier !== 'unusable';
+    const usable = state.userPos && !isPositionStale(state.userPos, Date.now()) && locationQuality(state.userPos.accuracy).tier !== 'unusable';
     const dist = usable ? buildingDistanceMeters(b.building) : null;
     const distLabel = dist === null ? '' :
       (dist >= 1000 ? `${(dist / 1000).toFixed(1)} km` : `${Math.round(dist)} m`);
@@ -375,18 +496,10 @@ function renderBuildingsGrid(buildings) {
       card.setAttribute('aria-label',
         `${buildingName(b.building)}, ${b.empty_rooms} of ${b.total_rooms} rooms free, ${distLabel} away`);
     }
-    card.innerHTML = `
-      <div style="width:52px;flex:none;font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:700;color:var(--text)">${esc(b.building)}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(buildingName(b.building))}${distLabel ? ` &middot; ${distLabel}` : ''}</div>
-        <div style="height:4px;border-radius:9999px;background:rgba(255,255,255,0.07);margin-top:7px;overflow:hidden">
-          <div style="height:100%;width:${freePct}%;border-radius:9999px;background:var(--free)"></div>
-        </div>
-      </div>
-      <div style="text-align:right;flex:none">
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:17px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--free);line-height:1.15">${b.empty_rooms}</div>
-        <div class="label" style="color:var(--faint)">of ${b.total_rooms}</div>
-      </div>`;
+    card.dataset.focusKey = `building:${b.building}`;
+    card.appendChild(textElement('div', b.building, 'width:52px;flex:none;font-size:15px;font-weight:700;color:var(--text);overflow-wrap:anywhere'));
+    card.appendChild(textElement('div', buildingName(b.building) + (distLabel ? ` · ${distLabel}` : ''), 'flex:1;min-width:0;font-size:12px;color:var(--muted)'));
+    card.appendChild(textElement('div', `${b.empty_rooms} of ${b.total_rooms} free`, 'font-size:13px;font-weight:700;color:var(--text)'));
     container.appendChild(card);
   });
 }
@@ -419,6 +532,7 @@ function renderBuildingsControls(buildings) {
     (on ? 'color:var(--free);background:rgba(63,255,139,0.09);border:1px solid rgba(63,255,139,0.28)'
         : 'color:var(--muted);background:transparent;border:1px solid var(--hairline-soft)');
   btn.textContent = 'Hide full';
+  btn.dataset.focusKey = 'hide-full';
   btn.addEventListener('click', toggleHideFull);
 
   const track = document.createElement('span');
@@ -436,6 +550,7 @@ function renderBuildingsControls(buildings) {
   const sortBtn = document.createElement('button');
   sortBtn.type = 'button';
   sortBtn.id = 'buildings-sort';
+  sortBtn.dataset.focusKey = 'building-sort';
   sortBtn.className = 'label';
   sortBtn.setAttribute('aria-pressed', distanceOn ? 'true' : 'false');
   sortBtn.style.cssText = 'display:flex;align-items:center;gap:7px;min-height:44px;padding:8px 14px;' +
@@ -502,96 +617,17 @@ async function setBuildingSort(mode) {
 }
 
 // ── Fetch data ─────────────────────────────────────────────────────────────
-async function fetchBuildings() {
-  try {
-    const params = [];
-    if (state.timeAt)  params.push(`at=${encodeURIComponent(state.timeAt)}`);
-    if (state.timeFor) params.push(`for=${state.timeFor}`);
-    if (state.dayAt)   params.push(`day=${encodeURIComponent(state.dayAt)}`);
-    const url = '/api/buildings' + (params.length ? '?' + params.join('&') : '');
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(r.status);
-    const data = await r.json();
-    state.buildingsData = data;
-    updateStats(data);
-    updateHomeHeroStat(data);
-    renderBuildingChips(data);
-    renderBuildingsControls(data);
-    renderBuildingsGrid(data);
-    if (state.map)     updateBuildingMarkers(state.map,     state.markers,     data);
-    // Hero markers stay non-interactive on every refresh, not just at init.
-    if (state.dashMap) updateBuildingMarkers(state.dashMap, state.dashMarkers, data, { interactive: false });
-    // Show no-classes banner if all buildings have 0 occupied rooms and no day override
-    const totalOccupied = data.reduce((s, b) => s + b.occupied_rooms, 0);
-    const isWeekendOrHoliday = !state.dayAt && totalOccupied === 0 && data.length > 0;
-    if (isWeekendOrHoliday) {
-      const dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
-      ['no-classes-banner-day', 'dash-no-classes-banner-day'].forEach(id => {
-        const el = $(id); if (el) el.textContent = dayName;
-      });
-    }
-    ['no-classes-banner', 'dash-no-classes-banner'].forEach(id => {
-      const el = $(id);
-      if (el) el.classList.toggle('hidden', !isWeekendOrHoliday);
-    });
-  } catch(e) { console.error('Buildings error:', e); }
-}
-
-// Query params shared by every availability endpoint, so the search index
-// reflects the same day/time the rest of the UI is showing.
+// Availability is published together by refresh(), never by individual fetches.
+async function fetchRooms() { return refresh(); }
 function filterParams({ building = false } = {}) {
-  const params = new URLSearchParams();
-  if (building && state.building) params.set('building', state.building);
-  if (state.timeAt)  params.set('at', state.timeAt);
-  if (state.timeFor) params.set('for', String(state.timeFor));
-  if (state.dayAt)   params.set('day', state.dayAt);
-  return params;
+  return reliability.queryParams(state.query, building);
 }
-
 async function fetchAllRoomsCache() {
-  // Re-fetch whenever the day/time filter changes — a cache built for "now"
-  // gives wrong answers once the user overrides the day or time.
   const key = filterParams().toString();
-  if (state.allRoomsCacheKey === key && state.allRoomsCache.length) return;
-  try {
-    const qs = key ? '?' + key : '';
-    const r = await fetch('/api/rooms/all' + qs);
-    if (!r.ok) throw new Error(r.status);
-    state.allRoomsCache = await r.json();
-    state.allRoomsCacheKey = key;
-  } catch(e) { console.error('allRoomsCache error:', e); }
-}
-
-async function fetchRooms() {
-  const params = [];
-  if (state.building) params.push(`building=${encodeURIComponent(state.building)}`);
-  if (state.timeAt)   params.push(`at=${encodeURIComponent(state.timeAt)}`);
-  if (state.timeFor)  params.push(`for=${state.timeFor}`);
-  if (state.dayAt)    params.push(`day=${encodeURIComponent(state.dayAt)}`);
-  const url = '/api/rooms' + (params.length ? '?' + params.join('&') : '');
-  renderRoomsGridSkeleton();
-  try {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(r.status);
-    let data = await r.json();
-    // Cache unfiltered rooms for Find Me a Room
-    if (!state.building && !state.timeAt && !state.timeFor && !state.dayAt) state.allRoomsData = data;
-    // Free all day filter
-    if (state.freeAllDay) data = data.filter(r => r.minutes_until_next === null);
-    state.lastRoomsData = data;
-    // A ?saved=1 deep link renders before any click has warmed the cache.
-    if (state.savedOnly) await fetchAllRoomsCache();
-    renderRoomsGrid(data);
-    renderSidebarTopRooms(data);
-    const t = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
-    setText('sidebar-status', `${data.length} rooms free · ${t}`);
-    setText('footer-sync', t);
-    announce(`${data.length} room${data.length === 1 ? '' : 's'} available${
-      state.building ? ' in ' + buildingName(state.building) : ''}.`);
-  } catch(e) {
-    console.error('Rooms error:', e);
-    announce('Could not load rooms.');
-  }
+  if (state.allRoomsCacheReady && state.allRoomsCacheKey === key &&
+      state.snapshot && Date.now() - state.snapshot.acceptedAt < REFRESH_INTERVAL_MS) return;
+  if (state.pendingRefresh && state.pendingRefresh.key === key) return state.pendingRefresh.promise;
+  return refresh();
 }
 
 // ── Stats ──────────────────────────────────────────────────────────────────
@@ -599,65 +635,65 @@ function updateStats(buildings) {
   const totalRooms = buildings.reduce((s, b) => s + b.total_rooms, 0);
   const totalEmpty = buildings.reduce((s, b) => s + b.empty_rooms, 0);
   const totalOccupied = totalRooms - totalEmpty;
-  const isNoClasses = !state.dayAt && totalOccupied === 0 && buildings.length > 0;
-  const occ = isNoClasses ? '—' : (totalRooms > 0 ? Math.round(totalOccupied / totalRooms * 100) + '%' : '0%');
+  const occ = totalRooms > 0 ? Math.round(totalOccupied / totalRooms * 100) + '%' : '—';
   setText('stat-total', totalRooms);
-  setText('stat-empty', isNoClasses ? 'All' : totalEmpty);
+  setText('stat-empty', totalEmpty);
   setText('stat-occ', occ);
   setText('stat-bldg', buildings.length);
-  setText('hdr-empty', isNoClasses ? 'All' : totalEmpty);
+  setText('hdr-empty', totalEmpty);
   setText('hdr-occ', occ);
-  const dayFull = state.dayAt || new Date().toLocaleDateString('en-US', { weekday: 'long' });
+  const dayFull = state.snapshot?.meta.context?.day || state.dayAt || reliability.campusTime().day;
   setText('hdr-day', dayFull);
 }
 
 
 // ── Time filter ────────────────────────────────────────────────────────────
+function openFilterSheet() {
+  if (filterDraftOpen) return;
+  syncQueryInputs();
+  $('soon-threshold-select').value = String(state.soonThresholdMins);
+  $('filter-free-all-day').checked = state.freeAllDay;
+  setText('filter-error', '');
+  filterDraftOpen = true;
+  $('filter-sheet').classList.remove('hidden');
+  overlays.open('filter-sheet', closeFilterSheet, '#day-filter');
+}
+
+function closeFilterSheet() {
+  filterDraftOpen = false;
+  $('filter-sheet')?.classList.add('hidden');
+  overlays.close('filter-sheet');
+  syncQueryInputs();
+}
+
 function applyTimeFilter() {
-  state.timeAt  = $('time-filter-at')?.value  || '';
-  state.timeFor = parseInt($('time-filter-for')?.value || '0');
-  state.dayAt   = $('day-filter')?.value || '';
-  const sel = $('soon-threshold-select');
-  if (sel) state.soonThresholdMins = parseInt(sel.value) || 30;
-  const ind = $('time-filter-indicator');
-  if (ind) ind.classList.toggle('hidden', !state.timeAt && !state.timeFor && !state.dayAt);
-  refresh();
-  syncURL();
+  const query = { ...state.query, at: $('time-filter-at')?.value || '',
+    for: Number($('time-filter-for')?.value || 0), day: $('day-filter')?.value || '',
+    until: $('time-filter-until')?.value || '' };
+  const error = reliability.validateQuery(query);
+  setText('filter-error', error);
+  if (error) {
+    const id = error.includes('after') ? 'time-filter-until' : error.includes('duration') ? 'time-filter-for' : 'time-filter-at';
+    $(id)?.focus(); return;
+  }
+  // Validate before publishing any query or display preference. A single URL
+  // update and refresh then use the complete committed selection.
+  state.soonThresholdMins = Number($('soon-threshold-select')?.value) || 30;
+  state.freeAllDay = Boolean($('filter-free-all-day')?.checked);
+  closeFilterSheet();
+  commitQuery(query);
 }
 
 function resetTimeFilter() {
-  state.timeAt  = '';
-  state.timeFor = 0;
-  state.dayAt   = '';
-  if ($('time-filter-at'))  $('time-filter-at').value  = '';
-  if ($('time-filter-for')) $('time-filter-for').value = '0';
-  if ($('day-filter'))      $('day-filter').value      = '';
-  const ind = $('time-filter-indicator');
-  if (ind) ind.classList.add('hidden');
-  refresh();
-  syncURL();
+  if (!filterDraftOpen) return commitQuery({ ...state.query, at:'', for:0, day:'', until:'' });
+  for (const id of ['day-filter','time-filter-at','time-filter-until']) $(id).value = '';
+  $('time-filter-for').value = '0';
+  $('soon-threshold-select').value = '30';
+  $('filter-free-all-day').checked = false;
+  setText('filter-error', '');
 }
 
-function roomType(room) {
-  return String(room).toUpperCase().endsWith('L') ? 'LAB' : null;
-}
-
-function toggleFilterMore() {
-  const sec = $('filter-secondary');
-  const btn = $('filter-more-btn');
-  if (!sec) return;
-  const open = sec.style.display !== 'none';
-  sec.style.display = open ? 'none' : 'flex';
-  if (btn) btn.style.color = open ? '' : '#3fff8b';
-}
-
-function applyThreshold() {
-  const sel = $('soon-threshold-select');
-  if (sel) state.soonThresholdMins = parseInt(sel.value) || 30;
-  // Re-fetch rooms so renderRoomsGrid gets fresh calls
-  fetchRooms();
-  syncURL();
-}
+function toggleFilterMore() { openFilterSheet(); }
 
 // ── Global search (grouped as-you-type autocomplete) ───────────────────────
 const SEARCH_STOPWORDS = new Set(['floor', 'fl', 'the', 'room', 'rooms', 'building', 'bldg', 'hall', 'at']);
@@ -726,7 +762,7 @@ function editDistance(a, b) {
 }
 
 function searchRoomSource() {
-  return state.allRoomsCache.length ? state.allRoomsCache : state.allRoomsData;
+  return state.allRoomsCacheReady ? state.allRoomsCache : state.allRoomsData;
 }
 
 function scoreBuilding(q, tokens, b) {
@@ -871,7 +907,7 @@ function buildSearchModel(rawQuery) {
 // Hex mirror of the :root status custom properties, for the call sites below
 // that assemble inline style strings by hand. Kept beside its only consumers
 // rather than in the component-helpers region, which is deliberately hex-free.
-const STATUS_HEX = { free: '#3fff8b', soon: '#f59e0b', busy: '#ff7166' };
+const STATUS_HEX = { free: '#3fff8b', soon: '#f59e0b', busy: '#ff7166', unknown: '#adaaaa' };
 
 // Everything the Rooms-view card needs to draw one room, derived from the
 // single status source. Busy rooms only reach the card via the Saved filter —
@@ -881,6 +917,7 @@ const STATUS_BORDER = {
   free: 'rgba(63,255,139,0.1)',
   soon: 'rgba(245,158,11,0.2)',
   busy: 'rgba(255,113,102,0.18)',
+  unknown: 'var(--hairline-soft)',
 };
 
 function roomCardStatus(room) {
@@ -892,8 +929,8 @@ function roomCardStatus(room) {
     border: STATUS_BORDER[st.kind],
     // The pill reads OPEN / CLOSING / IN USE; the right-hand figure is the
     // time remaining, which is meaningless for a room that is occupied.
-    label: busy ? 'IN USE' : st.kind === 'soon' ? 'CLOSING' : 'OPEN',
-    timeText: busy ? '' : formatTime(room.minutes_until_next),
+    label: st.kind === 'unknown' ? st.text.toUpperCase() : busy ? 'IN USE' : st.kind === 'soon' ? 'CLOSING' : 'OPEN',
+    timeText: busy || st.kind === 'unknown' ? '' : formatTime(room.minutes_until_next),
     statusWord: busy ? 'in use' : st.kind === 'soon' ? 'closing soon' : 'open',
     opacity: busy ? 0.55 : 1,
   };
@@ -954,8 +991,7 @@ function closeSearchUI({ clear = false } = {}) {
   if (isMobileSearchOpen()) {
     const overlay = $('mobile-search-overlay');
     if (overlay) overlay.classList.add('hidden');
-    const inp = $('mobile-search-input');
-    if (inp) inp.blur();
+    overlays.close('mobile-search-overlay');
   }
   if (clear) {
     ['global-search', 'mobile-search-input'].forEach(id => {
@@ -1028,6 +1064,9 @@ function activateSearchItem(item) {
 
 function renderSearchModel(container, model) {
   if (!container) return;
+  const previousSelection = searchFlatItems[searchActiveIndex];
+  const selectionKey = item => item ? JSON.stringify([item.kind, item.data?.building, item.data?.room]) : null;
+  const previousKey = selectionKey(previousSelection);
   container.textContent = '';
   searchFlatItems = [];
   searchActiveIndex = -1;
@@ -1083,13 +1122,13 @@ function renderSearchModel(container, model) {
 
   if (model.findRoom) {
     addItem('find', null, btn => {
-      btn.setAttribute('aria-label', 'Find Me a Room — best available rooms right now');
+      btn.setAttribute('aria-label', 'Find Me a Room — best matching rooms in this query');
       btn.innerHTML = `
         <div style="display:flex;align-items:center;gap:10px;min-width:0">
           <span class="material-symbols-outlined" style="font-size:18px;color:#3fff8b">search</span>
           <div>
             <div style="font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:700;color:#3fff8b">Find Me a Room</div>
-            <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;color:#adaaaa;margin-top:2px">Best available rooms right now</div>
+            <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;color:#adaaaa;margin-top:2px">Best matching rooms in this query</div>
           </div>
         </div>
         <span class="material-symbols-outlined" style="font-size:16px;color:#767575">arrow_forward</span>`;
@@ -1102,6 +1141,8 @@ function renderSearchModel(container, model) {
     searchPanelOpen = true;
   }
   setSearchExpanded(true);
+  const restoredIndex = previousKey ? searchFlatItems.findIndex(item => selectionKey(item) === previousKey) : -1;
+  highlightSearchIndex(restoredIndex);
 
   const n = searchFlatItems.length;
   if (model.emptyQuery) announce('Search suggestions. Type to filter buildings and rooms.');
@@ -1110,30 +1151,20 @@ function renderSearchModel(container, model) {
 }
 
 function fillBuildingOption(btn, b) {
-  const free = b.empty_rooms;
-  const total = b.total_rooms;
-  btn.setAttribute('aria-label', `${buildingLabel(b.building)}, ${free} of ${total} rooms free. Open building.`);
-  btn.innerHTML = `
-    <div style="display:flex;align-items:center;gap:10px;min-width:0">
-      <span class="material-symbols-outlined" style="font-size:18px;color:#3fff8b">apartment</span>
-      <div style="min-width:0">
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:800;color:#fff">${esc(b.building)}</div>
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;color:#adaaaa;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(buildingName(b.building))}</div>
-      </div>
-    </div>
-    <div style="font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:700;color:#3fff8b;flex-shrink:0;white-space:nowrap">${free} free</div>`;
+  btn.setAttribute('aria-label', `${buildingLabel(b.building)}, ${b.empty_rooms} of ${b.total_rooms} rooms free. Open building.`);
+  btn.dataset.focusKey = `search-building:${b.building}`;
+  btn.appendChild(textElement('div', buildingLabel(b.building), 'font-size:14px;color:var(--text)'));
+  btn.appendChild(textElement('div', `${b.empty_rooms} free`, 'font-size:12px;color:var(--muted)'));
 }
 
 function fillRoomOption(btn, room) {
   const st = roomStatusMeta(room);
-  const fl = Number.isFinite(room.floor) ? floorLabel(room.floor) : '';
   btn.setAttribute('aria-label', `${buildingName(room.building)} room ${room.room}, ${st.text}. Open schedule.`);
-  btn.innerHTML = `
-    <div style="min-width:0">
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:#767575;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:3px">${esc(buildingLabel(room.building))}${fl ? ' · ' + fl : ''}</div>
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:800;color:#fff;line-height:1">${esc(room.room)}</div>
-    </div>
-    <div style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:700;color:${st.color};flex-shrink:0;white-space:nowrap">${esc(st.text)}</div>`;
+  btn.dataset.focusKey = `search-room:${JSON.stringify([room.building,room.room])}`;
+  const text = textElement('div', buildingLabel(room.building), 'font-size:11px;color:var(--muted)');
+  text.appendChild(textElement('div', room.room, 'font-size:18px;font-weight:800;color:var(--text)'));
+  btn.appendChild(text);
+  btn.appendChild(textElement('span', st.text, `font-size:12px;color:${st.color}`));
 }
 
 async function runSearch(rawQuery) {
@@ -1214,8 +1245,8 @@ function openMobileSearch() {
   const inp = $('mobile-search-input');
   if (inp) {
     inp.value = headerVal;
-    setTimeout(() => inp.focus(), 0);
   }
+  overlays.open('mobile-search-overlay', () => closeSearchUI(), '#mobile-search-input');
   runSearch(headerVal);
 }
 
@@ -1223,12 +1254,7 @@ function toggleMobileSearch() {
   const overlay = $('mobile-search-overlay');
   if (!overlay) return;
   if (overlay.classList.contains('hidden')) openMobileSearch();
-  else {
-    overlay.classList.add('hidden');
-    const inp = $('mobile-search-input');
-    if (inp) inp.blur();
-    setSearchExpanded(false);
-  }
+  else closeSearchUI();
 }
 
 document.addEventListener('mousedown', e => {
@@ -1251,29 +1277,16 @@ function _sortedBestRooms(rooms, limit) {
 function renderSidebarTopRooms(rooms) {
   const container = $('sidebar-top-rooms');
   if (!container) return;
-  container.innerHTML = '';
+  container.replaceChildren();
   const best = _sortedBestRooms(rooms, 5);
-  if (!best.length) {
-    const el = document.createElement('div');
-    el.style.cssText = `padding:8px;font-family:'Space Grotesk',sans-serif;font-size:9px;color:#484847;text-transform:uppercase;letter-spacing:0.1em`;
-    el.textContent = 'None available';
-    container.appendChild(el);
-    return;
-  }
+  if (!best.length) { container.textContent = 'No matching rooms'; return; }
   best.forEach(room => {
-    const isSoon = isClosingSoon(room);
-    const color = isSoon ? STATUS_HEX.soon : STATUS_HEX.free;
-    const btn = document.createElement('button');
-    btn.style.cssText = `width:100%;display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:2px;transition:background 0.15s;cursor:pointer;border:none;background:transparent;text-align:left`;
-    btn.addEventListener('click', () => openRoomDetail(room.building, room.room));
-    btn.addEventListener('mouseover', () => { btn.style.background = 'rgba(255,255,255,0.05)'; });
-    btn.addEventListener('mouseout',  () => { btn.style.background = 'transparent'; });
-    btn.innerHTML = `
-      <div>
-        <span style="font-family:'Space Grotesk',sans-serif;font-size:8px;color:#767575;text-transform:uppercase;letter-spacing:0.1em">${room.building}</span>
-        <span style="font-family:'Space Grotesk',sans-serif;font-size:13px;font-weight:700;color:#fff;margin-left:6px">${room.room}</span>
-      </div>
-      <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:${color};white-space:nowrap">${formatTime(room.minutes_until_next)}</span>`;
+    const btn = textElement('button', '', 'width:100%;display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:6px 8px;cursor:pointer;background:transparent;text-align:left');
+    btn.type = 'button';
+    btn.dataset.focusKey = `sidebar:${JSON.stringify([room.building,room.room])}`;
+    btn.addEventListener('click', () => openRoomDetail(room.building,room.room));
+    btn.appendChild(textElement('span', `${room.building} ${room.room}`, 'font-size:12px;color:var(--text);overflow-wrap:anywhere'));
+    btn.appendChild(statusPill(room));
     container.appendChild(btn);
   });
 }
@@ -1310,112 +1323,67 @@ function renderRoomsGridSkeleton() {
 }
 
 // ── Room grid (rooms view) ─────────────────────────────────────────────────
+function savedRooms() {
+  const roster = searchRoomSource();
+  return getPins().map(pin => {
+    const index = pin.indexOf('|');
+    const building = pin.slice(0,index), room = pin.slice(index + 1);
+    return roster.find(entry => entry.building === building && String(entry.room) === room) ||
+      {building, room, ...(state.allRoomsCacheReady ? {missingFromSchedule:true} : {availabilityUnknown:true})};
+  });
+}
+
+function suitabilityLabel(room) {
+  if (room.availabilityUnknown) return 'Availability unknown';
+  if (room.missingFromSchedule) return 'Not in current schedule';
+  if (room.matches_requested_window === false) return 'Does not match requested window';
+  if (room.matches_requested_window === true) return 'Matches requested window';
+  return 'Requested-window match unknown';
+}
+
 function renderRoomsGrid(rooms) {
   const container = $('rooms-container');
   if (!container) return;
   updateSavedFilterButtons();
-  // "Available Rooms" is a false heading over a list that includes occupied
-  // saved rooms, and the building chips count free rooms, which says nothing
-  // about a handful of saved ones.
   setText('rooms-heading', state.savedOnly ? 'SAVED ROOMS' : 'AVAILABLE ROOMS');
-  const _chips = $('building-filter');
-  if (_chips) _chips.style.display = state.savedOnly ? 'none' : 'flex';
-  // The free-rooms feed cannot answer "show me my saved rooms" — it omits any
-  // room that is currently occupied, so a saved room would vanish the moment
-  // a class started in it. Saved mode reads the every-room cache instead.
-  const visibleRooms = state.savedOnly
-    ? searchRoomSource()
-        .filter(room => isPinned(room.building, room.room))
-        .filter(room => !state.building || room.building === state.building)
-    : rooms;
+  const chips = $('building-filter');
+  if (chips) chips.style.display = state.savedOnly ? 'none' : 'flex';
+  const visibleRooms = state.savedOnly ? savedRooms() : rooms;
   const noun = state.savedOnly ? 'saved room' : 'room';
-  setText('grid-count', `${visibleRooms.length} ${noun}${visibleRooms.length === 1 ? '' : 's'}${state.savedOnly ? '' : ' available'}`);
-  const _ts = $('grid-timestamp');
-  if (_ts) {
-    const _now = new Date();
-    _ts.textContent = `Updated ${_now.getHours()}:${String(_now.getMinutes()).padStart(2,'0')}`;
-  }
-  container.textContent = '';
-
+  setText('grid-count', `${visibleRooms.length} ${noun}${visibleRooms.length === 1 ? '' : 's'}${state.savedOnly ? ' · independent of building/duration filters' : ' matching'}`);
+  container.replaceChildren();
   if (!visibleRooms.length) {
-    const _emptyDiv = document.createElement('div');
-    _emptyDiv.className = 'col-span-full flex flex-col items-center justify-center py-24 gap-4';
-    const _emptyIcon = document.createElement('span');
-    _emptyIcon.className = 'material-symbols-outlined';
-    _emptyIcon.style.cssText = 'font-size:48px;color:#3fff8b;opacity:0.2';
-    _emptyIcon.textContent = 'meeting_room';
-    const _emptyText = document.createElement('div');
-    _emptyText.style.textAlign = 'center';
-    const _emptyTitle = document.createElement('div');
-    _emptyTitle.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:700;color:#adaaaa;text-transform:uppercase;letter-spacing:0.15em";
-    _emptyTitle.textContent = state.savedOnly ? 'No saved rooms yet' : 'No empty rooms right now';
-    const _emptySub = document.createElement('div');
-    _emptySub.style.cssText = "font-family:'Space Grotesk',sans-serif;font-size:10px;color:#555;margin-top:6px";
-    _emptySub.textContent = state.savedOnly
-      ? 'Tap ★ on any room to save it.'
-      : 'Try adjusting filters or checking a different time';
-    _emptyText.appendChild(_emptyTitle);
-    _emptyText.appendChild(_emptySub);
-    _emptyDiv.appendChild(_emptyIcon);
-    _emptyDiv.appendChild(_emptyText);
-    container.appendChild(_emptyDiv);
-    return;
+    const empty = textElement('div', state.savedOnly ? 'No saved rooms yet' : 'No rooms match this query.', 'grid-column:1/-1;padding:32px 4px;color:var(--muted);text-align:center');
+    empty.appendChild(textElement('div', state.savedOnly ? 'Tap ★ on any room to save it.' : 'Try adjusting filters or checking a different time.', 'font-size:12px;margin-top:8px'));
+    container.appendChild(empty); return;
   }
-
-  const frag = document.createDocumentFragment();
-  pinSort(visibleRooms).forEach((room, i) => {
-    const cs = roomCardStatus(room);
-    const color = cs.color;
-    const border = cs.border;
-    const pinned = isPinned(room.building, room.room);
+  pinSort(visibleRooms).forEach(room => {
+    const cs = roomCardStatus(room), pinned = isPinned(room.building,room.room);
+    const key = JSON.stringify([room.building, String(room.room)]);
     const card = document.createElement('div');
-    card.className = 'room-card-in interactive' + (cs.opacity < 1 ? ' room-card-busy' : '');
-    card.style.cssText = `background:linear-gradient(135deg,rgba(26,25,25,0.8),rgba(14,14,14,0.95));border:1px solid ${border};padding:14px;border-radius:2px;position:relative;overflow:hidden;transition:border-color 0.2s,background 0.2s;cursor:pointer;animation-delay:${Math.min(i,30)*22}ms`;
+    card.className = 'interactive' + (cs.kind === 'busy' ? ' room-card-busy' : '');
+    card.dataset.roomKey = key;
+    card.dataset.focusKey = `rooms:${key}`;
+    card.style.cssText = `background:var(--raised);border:1px solid ${cs.border};padding:14px;border-radius:2px;position:relative;cursor:pointer`;
     card.title = `${room.building}-${room.room} · tap for schedule`;
-
-    makeActivatable(
-      card,
-      `${buildingName(room.building)} room ${room.room}, ${cs.statusWord}${
-        cs.kind === 'busy' ? '' :
-        room.minutes_until_next === null ? ', free all day'
-                                         : `, ${room.minutes_until_next} minutes free`
-      }. Open schedule.`,
-      () => openRoomDetail(room.building, room.room)
-    );
-    card.addEventListener('mouseover', () => { card.style.borderColor = color + '50'; card.style.background = `linear-gradient(135deg,rgba(26,25,25,0.95),rgba(${color==='#3fff8b'?'14,40,24':'40,20,14'},0.95))`; });
-    card.addEventListener('mouseout',  () => { card.style.borderColor = border; card.style.background = 'linear-gradient(135deg,rgba(26,25,25,0.8),rgba(14,14,14,0.95))'; });
-    const capLabel = room.capacity ? `<span style="font-family:'Space Grotesk',sans-serif;font-size:8px;color:#484847;letter-spacing:0.1em">cap ${room.capacity}</span>` : '';
-    const type = roomType(room.room);
-    const typeLabel = type ? `<span style="font-family:'Space Grotesk',sans-serif;font-size:8px;font-weight:700;padding:1px 5px;background:rgba(110,155,255,0.12);border:1px solid rgba(110,155,255,0.25);color:#6e9bff;border-radius:2px;letter-spacing:0.08em">${type}</span>` : '';
-    card.innerHTML = `
-      <div style="position:absolute;top:0;left:0;right:0;height:2px;background:${color};opacity:0.6"></div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-        <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:600;color:#767575;letter-spacing:0.15em;text-transform:uppercase">${room.building}</span>
-        <div style="display:flex;align-items:center;gap:6px">
-          ${typeLabel}
-          <button type="button"
-                onclick="event.stopPropagation();togglePin('${esc(room.building)}','${esc(room.room)}')"
-                onkeydown="event.stopPropagation()"
-                aria-pressed="${pinned}"
-                aria-label="${pinned ? 'Unpin' : 'Pin'} ${esc(room.building)} ${esc(room.room)}"
-                title="${pinned ? 'Unpin' : 'Pin to top'}"
-                style="font-size:15px;cursor:pointer;color:${pinned ? '#3fff8b' : '#8a8a89'};line-height:1;background:none;border:none;padding:8px;margin:-8px;min-width:32px;min-height:32px">${pinned ? '★' : '☆'}</button>
-        </div>
-      </div>
-      <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:12px">
-        <span style="font-family:'Space Grotesk',sans-serif;font-size:26px;font-weight:800;color:#fff;letter-spacing:0.05em">${room.room}</span>
-        ${capLabel}
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="display:flex;align-items:center;gap:5px">
-          <span style="width:6px;height:6px;border-radius:50%;background:${color};display:inline-block;animation:pulse 2s infinite"></span>
-          <span style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:0.1em">${cs.label}</span>
-        </div>
-        <span style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:800;color:${color};letter-spacing:0.02em">${cs.timeText}</span>
-      </div>`;
-    frag.appendChild(card);
+    makeActivatable(card, `${buildingName(room.building)} room ${room.room}, ${roomStatus(room).text}. ${suitabilityLabel(room)}. Open schedule.`, () => openRoomDetail(room.building,room.room));
+    const header = textElement('div', '', 'display:flex;align-items:center;justify-content:space-between;gap:8px');
+    header.appendChild(textElement('span', room.building, 'font-size:11px;color:var(--muted);overflow-wrap:anywhere'));
+    const pin = textElement('button', pinned ? '★' : '☆', `color:${pinned ? 'var(--free)' : 'var(--muted)'};background:none;border:none;padding:8px;font-size:17px;cursor:pointer`);
+    pin.type = 'button'; pin.dataset.focusKey = `pin:${key}`;
+    pin.setAttribute('aria-pressed', String(pinned));
+    pin.setAttribute('aria-label', `${pinned ? 'Unpin' : 'Pin'} ${room.building} ${room.room}`);
+    pin.addEventListener('click', event => { event.stopPropagation(); togglePin(room.building,room.room); });
+    pin.addEventListener('keydown', event => event.stopPropagation());
+    header.appendChild(pin); card.appendChild(header);
+    card.appendChild(textElement('div', room.room, 'font-family:"Space Grotesk",sans-serif;font-size:26px;font-weight:800;color:var(--text);overflow-wrap:anywhere'));
+    if (room.capacity) card.appendChild(textElement('div', `Schedule capacity ${room.capacity}`, 'font-size:10px;color:var(--muted)'));
+    const status = textElement('div', cs.label, `font-size:11px;font-weight:700;margin-top:12px;color:${cs.color}`);
+    card.appendChild(status);
+    if (cs.timeText) card.appendChild(textElement('div', cs.timeText, 'font-size:12px;color:var(--text);margin-top:4px'));
+    card.appendChild(textElement('div', suitabilityLabel(room), 'font-size:11px;color:var(--muted);margin-top:6px'));
+    container.appendChild(card);
   });
-  container.appendChild(frag);
 }
 
 // ── Building filter chips (rooms view) ────────────────────────────────────
@@ -1428,6 +1396,7 @@ function renderBuildingChips(buildings) {
     const active = state.building === value;
     btn.style.cssText = `flex-shrink:0;padding:6px 14px;font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:700;border-radius:2px;text-transform:uppercase;letter-spacing:0.1em;transition:all 0.15s;cursor:pointer;border:1px solid ${active?'#3fff8b':'rgba(255,255,255,0.08)'};background:${active?'#3fff8b':'transparent'};color:${active?'#005d2c':'#adaaaa'}`;
     btn.textContent = label;
+    btn.dataset.focusKey = `building-filter:${value}`;
     btn.addEventListener('click', () => {
       state.building = value;
       const gs = $('global-search');
@@ -1441,7 +1410,7 @@ function renderBuildingChips(buildings) {
     return btn;
   };
   container.appendChild(makeChip('ALL', ''));
-  buildings.forEach(b => container.appendChild(makeChip(`${b.building} (${b.empty_rooms})`, b.building)));
+  buildings.forEach(b => container.appendChild(makeChip(`${b.building} (${b.matching_rooms ?? b.empty_rooms})`, b.building)));
 }
 
 // ── Map helpers ────────────────────────────────────────────────────────────
@@ -1474,11 +1443,13 @@ function updateBuildingMarkers(map, markersObj, buildings, { interactive = true 
       radius:18, fillColor:color, color:'#fff', weight:2, fillOpacity:0.65,
       interactive
     }).addTo(map);
+    // Code above the circle, count below it, so neither covers the other.
+    const labelNode = textElement('div', '', 'display:flex;flex-direction:column;align-items:center;justify-content:space-between;height:68px;pointer-events:none;text-shadow:0 1px 4px rgba(0,0,0,0.9)');
+    labelNode.appendChild(textElement('div', b.building, 'font-size:12px;line-height:14px;font-weight:800;color:#fff'));
+    labelNode.appendChild(textElement('div', `${b.empty_rooms} free`, 'font-size:12px;line-height:14px;font-weight:700;color:#fff;background:rgba(0,0,0,0.78);padding:0 6px;border-radius:7px;white-space:nowrap'));
     const label = L.marker(coords, {
-      icon: L.divIcon({
-        html:`<div style="text-align:center;pointer-events:none;transform:translateY(-50%)"><div style="font-family:'Space Grotesk',sans-serif;font-size:11px;font-weight:800;color:#fff;text-shadow:0 1px 4px rgba(0,0,0,0.9);letter-spacing:0.08em">${b.building}</div><div style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:${color};text-shadow:0 1px 3px rgba(0,0,0,0.9)">${b.empty_rooms} free</div></div>`,
-        className:'', iconSize:[70,32], iconAnchor:[35,16]
-      }), interactive:false, zIndexOffset:1000
+      icon: L.divIcon({html:labelNode, className:'', iconSize:[70,68], iconAnchor:[35,34]}),
+      interactive:false, zIndexOffset:1000
     }).addTo(map);
     if (interactive) {
       circle.on('click', () => openBuildingPanel(b));
@@ -1547,94 +1518,63 @@ function updateHomeHeroStat(buildings) {
 function openBuildingPanel(buildingData) {
   const panel = $('floor-panel');
   if (!panel) return;
-
-  // Update header
-  setText('panel-building', buildingData.building);
-  setText('ps-free',  buildingData.empty_rooms);
-  setText('ps-busy',  buildingData.total_rooms - buildingData.empty_rooms);
-  setText('ps-total', buildingData.total_rooms);
-
-  // Slide in
+  const changed = state.openBuilding !== buildingData.building;
+  state.openBuilding = buildingData.building;
   panel.style.transform = 'translateX(0)';
+  if (changed && $('panel-search')) $('panel-search').value = '';
+  renderOpenBuilding();
+  panel.setAttribute('aria-label', `Building ${buildingData.building}`);
+  overlays.open('floor-panel', closeFloorPanel, '[aria-label="Close building panel"]');
+  refresh();
+}
 
-  // CAB = library special case
-  if (buildingData.building === 'CAB') {
-    const sw = $('panel-search-wrap'); if (sw) sw.style.display = 'none';
-    const hw = $('panel-heatmap-wrap'); if (hw) hw.style.display = 'none';
-    const fc = $('floor-rooms');
-    if (fc) {
-      fc.innerHTML = `<div style="padding:32px 16px;text-align:center;grid-column:1/-1">
-        <span class="material-symbols-outlined" style="font-size:36px;color:#3fff8b;opacity:0.4;display:block;margin-bottom:10px">menu_book</span>
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:11px;color:#adaaaa;line-height:1.7;margin-bottom:14px">Study rooms must be reserved online via the NJIT Library.</div>
-        <a href="https://researchguides.njit.edu/services/group-study-rooms" target="_blank" rel="noopener"
-           style="display:inline-block;padding:8px 16px;background:#3fff8b22;border:1px solid #3fff8b55;color:#3fff8b;font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.15em;text-decoration:none;border-radius:2px">
-          Reserve Study Rooms ↗
-        </a></div>`;
-    }
-    return;
-  }
-
-  // Restore sections
-  const sw = $('panel-search-wrap'); if (sw) sw.style.display = '';
-  const hw = $('panel-heatmap-wrap'); if (hw) hw.style.display = '';
-  if ($('panel-search')) $('panel-search').value = '';
-  renderHeatmap(buildingData.building);
-
-  // Loading state
-  const fc = $('floor-rooms');
-  if (fc) fc.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:48px 16px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em">Loading…</div>`;
-
-  const params = filterParams();
-  params.set('building', buildingData.building);
-
-  fetch('/api/rooms/all?' + params.toString())
-    .then(r => r.json())
-    .then(rooms => {
-      state.floorRoomsData = rooms;
-      renderRoomsByFloor(rooms);
-    })
-    .catch(() => {
-      if (fc) fc.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:48px;color:#ff7166;font-size:11px">Error loading rooms.</div>`;
-    });
+function renderOpenBuilding() {
+  const code = state.openBuilding;
+  if (!code) return;
+  const data = state.buildingsData.find(building => building.building === code);
+  setText('panel-building', code);
+  setText('ps-free', data?.empty_rooms ?? '—');
+  setText('ps-busy', data?.occupied_rooms ?? '—');
+  setText('ps-total', data?.total_rooms ?? '—');
+  state.floorRoomsData = searchRoomSource().filter(room => room.building === code);
+  renderRoomsByFloor(state.floorRoomsData);
+  filterFloorRooms($('panel-search')?.value || '');
+  renderHeatmap(state.snapshot?.buildingKey === code ? state.snapshot.heatmap : null);
 }
 
 function closeFloorPanel() {
+  state.openBuilding = '';
   const panel = $('floor-panel');
   if (panel) panel.style.transform = 'translateX(100%)';
+  overlays.close('floor-panel');
 }
 
-// ── Weekly busyness heatmap (building panel) ────────────────────────────────
-function renderHeatmap(building) {
+// Preserve the existing weekly view, using bounded snapshot data and DOM titles.
+function renderHeatmap(data) {
   const wrap = $('panel-heatmap');
   if (!wrap) return;
-  wrap.innerHTML = `<div style="font-size:9px;color:#767575;font-family:'Space Grotesk',sans-serif;text-transform:uppercase">Loading…</div>`;
-  fetch('/api/heatmap?building=' + encodeURIComponent(building))
-    .then(r => r.json())
-    .then(d => {
-      if (!d.days) { wrap.innerHTML = ''; return; }
-      const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-      const hourLabel = h => (h % 12 || 12) + (h < 12 ? 'a' : 'p');
-      let html = `<div style="display:grid;grid-template-columns:26px repeat(${d.hours.length},1fr);gap:2px;align-items:center">`;
-      html += '<div></div>' + d.hours.map(h => {
-        const lbl = [7, 12, 17, 21].includes(h) ? hourLabel(h) : '';
-        return `<div style="font-size:7px;color:#767575;text-align:center;font-family:monospace">${lbl}</div>`;
-      }).join('');
-      d.days.forEach((counts, di) => {
-        // Hide weekend rows with zero classes — most buildings are quiet then
-        if (di >= 5 && counts.every(c => c === 0)) return;
-        html += `<div style="font-size:8px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-weight:700">${DAY_LABELS[di]}</div>`;
-        html += counts.map((c, hi) => {
-          const pct = d.total_rooms ? c / d.total_rooms : 0;
-          const bg = pct === 0 ? 'rgba(63,255,139,0.07)' : `rgba(255,113,102,${(0.15 + 0.75 * pct).toFixed(2)})`;
-          const title = `${DAY_LABELS[di]} ${hourLabel(d.hours[hi])}: ${c}/${d.total_rooms} rooms busy`;
-          return `<div class="heatmap-cell" title="${title}" style="height:12px;border-radius:1px;background:${bg}"></div>`;
-        }).join('');
-      });
-      html += '</div>';
-      html += `<div style="display:flex;justify-content:space-between;margin-top:6px;font-size:8px;color:#767575;font-family:'Space Grotesk',sans-serif"><span>■ quiet</span><span style="color:#ff7166">■ busy</span></div>`;
-      wrap.innerHTML = html;
-    })
-    .catch(() => { wrap.innerHTML = ''; });
+  wrap.replaceChildren();
+  if (!data || !Array.isArray(data.days) || !Array.isArray(data.hours)) {
+    wrap.textContent = 'Weekly schedule unavailable.'; return;
+  }
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const grid = document.createElement('div');
+  grid.style.cssText = `display:grid;grid-template-columns:26px repeat(${data.hours.length},1fr);gap:2px;align-items:center`;
+  grid.appendChild(document.createElement('div'));
+  data.hours.forEach(hour => grid.appendChild(textElement('div', [7,12,17,21].includes(hour) ? (hour % 12 || 12) + (hour < 12 ? 'a' : 'p') : '', 'font-size:8px;color:var(--muted)')));
+  data.days.forEach((counts, day) => {
+    if (!Array.isArray(counts) || (day >= 5 && counts.every(count => count === 0))) return;
+    grid.appendChild(textElement('div', days[day], 'font-size:9px;color:var(--muted)'));
+    counts.forEach((count, hour) => {
+      const fraction = data.total_rooms ? Math.max(0,Math.min(1,Number(count) / data.total_rooms)) : 0;
+      const cell = textElement('div', '', `height:12px;border-radius:1px;background:${fraction === 0 ? 'rgba(63,255,139,0.07)' : `rgba(255,113,102,${0.15 + 0.75 * fraction})`}`);
+      cell.className = 'heatmap-cell';
+      cell.title = `${days[day]} ${data.hours[hour]}:00: ${count}/${data.total_rooms} rooms busy`;
+      grid.appendChild(cell);
+    });
+  });
+  wrap.appendChild(grid);
+  wrap.appendChild(textElement('div', 'Quiet → Busy · hover for scheduled room counts', 'font-size:9px;color:var(--muted);margin-top:6px'));
 }
 
 // Rooms grouped by floor. In-use rooms stay visible but dimmed — hiding them
@@ -1654,7 +1594,7 @@ function renderRoomsByFloor(rooms) {
     const head = document.createElement('div');
     head.dataset.floorHead = floor;
     head.style.cssText = 'grid-column:1/-1;display:flex;align-items:center;gap:10px;margin-top:8px';
-    head.appendChild(groupLabel(floor === 0 ? 'Ground floor' : `Floor ${floor}`));
+    head.appendChild(groupLabel(floor === null || floor === undefined ? 'Floor not recorded' : floor === 0 ? 'Ground floor' : `Floor ${floor}`));
     const rule = document.createElement('span');
     rule.style.cssText = 'flex:1;height:1px;background:var(--hairline-soft)';
     head.appendChild(rule);
@@ -1670,6 +1610,7 @@ function renderRoomsByFloor(rooms) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.dataset.room = room.room;
+      btn.dataset.focusKey = `floor:${JSON.stringify([room.building,room.room])}`;
       btn.dataset.floor = floor;
       btn.setAttribute('aria-label',
         `Room ${room.room}, ${st.text}. Open schedule.`);
@@ -1725,20 +1666,8 @@ function filterFloorRooms(query) {
 let selectedFile = null;
 
 async function fetchScheduleInfo() {
-  try {
-    const r = await fetch('/api/schedule-info');
-    const d = await r.json();
-    setText('si-entries',   d.entries?.toLocaleString() ?? '--');
-    setText('si-buildings', d.buildings ?? '--');
-    setText('si-rooms',     d.rooms ?? '--');
-    setText('si-filename',  d.filename || 'Unknown');
-    const loaded = $('si-loaded');
-    if (loaded) {
-      loaded.textContent = d.loaded_at
-        ? new Date(d.loaded_at).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})
-        : '--';
-    }
-  } catch(e) { console.error('schedule-info error:', e); }
+  if (state.snapshot) renderScheduleInfo(state.snapshot.info);
+  else return fetchAllRoomsCache();
 }
 
 function handleDrop(e) {
@@ -1794,34 +1723,72 @@ async function uploadSchedule() {
   if (!selectedFile) return;
   const btn = $('upload-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
-
   const form = new FormData();
   form.append('file', selectedFile);
-  const pw = ($('upload-password') || {}).value || '';
-  if (pw) form.append('password', pw);
-
+  form.append('password', $('upload-password')?.value || '');
+  if ($('upload-password')) $('upload-password').value = '';
   try {
-    const r = await fetch('/api/upload-schedule', { method: 'POST', body: form });
-    const d = await r.json();
-
-    if (!r.ok || d.error) {
-      showUploadStatus('error', d.error || 'Upload failed.');
-      if (btn) { btn.disabled = false; btn.textContent = 'Upload & Apply Schedule'; }
-      return;
-    }
-
-    // Success — update info panel and refresh all data
-    showUploadStatus('success',
-      `✓ Schedule loaded — ${d.entries.toLocaleString()} entries · ${d.buildings} buildings · ${d.rooms} rooms`);
-    fetchScheduleInfo();
+    const {data} = await reliability.request('/api/upload-schedule', {method:'POST',body:form,timeoutMs:120000});
     clearFileSelection();
-    await refresh(); // re-fetch buildings + rooms so the rest of the app updates immediately
-
-    if (btn) { btn.disabled = false; btn.textContent = 'Upload & Apply Schedule'; }
-  } catch(e) {
-    showUploadStatus('error', 'Network error — could not reach server.');
-    if (btn) { btn.disabled = false; btn.textContent = 'Upload & Apply Schedule'; }
+    showUploadStatus('success', `Schedule loaded — ${data.entries?.toLocaleString() || 0} entries. Refreshing availability…`);
+    await refresh();
+    await loadExportTerms().catch(() => {});
+  } catch (error) {
+    const uncertain = ['timeout','offline'].includes(error.kind) || [502,504].includes(error.status) || (error.kind === 'error' && !error.status);
+    showUploadStatus('error', uncertain ? 'The upload outcome could not be confirmed and may have been applied. Check the current schedule before uploading again.' : error.message);
+  } finally {
+    if (btn) { btn.disabled = !selectedFile; btn.textContent = 'Upload & Apply Schedule'; }
   }
+}
+
+let exportTermsGeneration = 0;
+async function loadExportTerms() {
+  const generation = ++exportTermsGeneration;
+  const select = $('export-term');
+  setText('export-term-status', 'Loading stored semesters…');
+  try {
+    const {data} = await reliability.request('/api/terms', {cache:'no-store'});
+    if (!Array.isArray(data)) throw new Error('Stored semester information is unavailable.');
+    const terms = data.filter(item => Number.isInteger(item.term) && item.term > 0);
+    if (generation !== exportTermsGeneration) return terms;
+    if (select) {
+      const previous = select.value;
+      select.replaceChildren();
+      terms.forEach(item => {
+        const option = textElement('option', `${item.semester || item.term} · ${item.filename || 'stored schedule'}`);
+        option.value = String(item.term); select.appendChild(option);
+      });
+      select.value = String(terms.find(item => String(item.term) === previous)?.term || terms.find(item => item.active)?.term || terms[0]?.term || '');
+      select.disabled = !terms.length;
+    }
+    setText('export-term-status', terms.length ? 'Export uses the selected stored semester and original file format.' : 'No stored schedule to export. Upload a valid schedule first.');
+    return terms;
+  } catch (error) {
+    if (generation === exportTermsGeneration) setText('export-term-status', error.message);
+    throw error;
+  }
+}
+
+async function exportSchedule() {
+  const btn = $('export-btn');
+  if (btn) btn.disabled = true;
+  const password = ($('upload-password')?.value || '').trim();
+  if ($('upload-password')) $('upload-password').value = '';
+  try {
+    const terms = await loadExportTerms();
+    const term = terms.find(item => String(item.term) === $('export-term')?.value);
+    if (!term) { showUploadStatus('error', 'No stored schedule to export. Upload a valid schedule first.'); return; }
+    const {data, filename} = await reliability.request('/api/export-schedule?' + new URLSearchParams({term:term.term}), {
+      headers: {Authorization: `Bearer ${password}`}, responseType:'blob', cache:'no-store', timeoutMs:60000,
+    });
+    const url = URL.createObjectURL(data);
+    const link = document.createElement('a');
+    link.href = url; link.download = filename || term.filename || 'schedule-download';
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showUploadStatus('success', 'Schedule exported. Password was not saved.');
+  } catch (error) { showUploadStatus('error', error.message); }
+  finally { if (btn) btn.disabled = false; }
 }
 
 function showUploadStatus(type, msg) {
@@ -1897,6 +1864,7 @@ function renderDetailPin() {
 }
 
 function splitDetailRoom(key) {
+  if (state.detailIdentity?.key === key) return [state.detailIdentity.building, state.detailIdentity.room];
   const i = key.indexOf('-');
   return [key.slice(0, i), key.slice(i + 1)];
 }
@@ -1908,41 +1876,36 @@ function toggleDetailPin() {
   renderDetailPin();
 }
 
-function openRoomDetail(building, room) {
-  const sheet    = $('room-detail-sheet');
-  const backdrop = $('room-detail-backdrop');
+function showRoomDetail(building, room) {
+  const sheet = $('room-detail-sheet');
   if (!sheet) return;
-
-  state.detailRoom = `${building}-${room}`;
-  syncURL();
-  renderDetailPin();
-
   setText('rds-building', `${building} · Room Detail`);
   setText('rds-room', room);
-  const statusEl = $('rds-status');
-  if (statusEl) { statusEl.textContent = 'Loading…'; statusEl.style.cssText = 'color:#767575;font-size:10px;font-family:"Space Grotesk",sans-serif'; }
-  setText('rds-day', '');
+  setText('rds-status', 'Loading…');
+  setText('rds-day', reliability.contextLabel(state.query));
   setText('rds-summary', '');
-  const tl = $('rds-timeline'); if (tl) tl.innerHTML = '';
-  const list = $('rds-list');
-  if (list) list.innerHTML = `<div style="text-align:center;padding:40px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase;letter-spacing:0.1em">Loading…</div>`;
-
-  if (backdrop) backdrop.classList.remove('hidden');
+  setText('rds-list', 'Loading schedule…');
+  setText('rds-timeline', '');
+  $('room-free-window')?.classList.add('hidden');
+  $('rds-capacity')?.classList.add('hidden');
+  $('room-detail-backdrop')?.classList.remove('hidden');
   sheet.style.transform = 'translateY(0)';
+  sheet.setAttribute('aria-label', `Room detail · ${building} ${room}`);
+  overlays.open('room-detail-sheet', closeRoomDetail, '[aria-label="Close room detail"]');
+  renderDetailPin();
+}
 
-  // Forward the day/time override, as every other fetch does. Without it the
-  // sheet showed today's schedule while the panel behind it showed the
-  // filtered day.
-  const rdParams = filterParams();
-  rdParams.set('building', building);
-  rdParams.set('room', room);
-
-  fetch('/api/room/schedule?' + rdParams.toString())
-    .then(r => r.json())
-    .then(data => renderRoomDetail(data))
-    .catch(() => {
-      if (list) list.innerHTML = `<div style="color:#ff7166;text-align:center;padding:40px;font-size:11px;font-family:'Space Grotesk',sans-serif">Error loading schedule.</div>`;
-    });
+function openRoomDetail(building, room) {
+  const key = `${building}-${room}`;
+  const changed = state.detailIdentity?.building !== building || state.detailIdentity?.room !== room;
+  state.detailIdentity = { key, building, room };
+  if (changed || state.detailRoom !== key || !state.detailData) {
+    state.detailRoom = key;
+    state.detailData = null;
+    showRoomDetail(building, room);
+  }
+  syncURL();
+  return refresh();
 }
 
 function closeRoomDetail() {
@@ -1953,6 +1916,7 @@ function closeRoomDetail() {
   const fwEl = $('room-free-window');
   if (fwEl) fwEl.classList.add('hidden');
   state.detailRoom = '';
+  overlays.close('room-detail-sheet');
   syncURL();
 }
 
@@ -1966,136 +1930,71 @@ function copyRoomLink() {
   }).catch(() => prompt('Copy this link:', window.location.href));
 }
 
+function detailRoomFacts(data) {
+  return { ...data, empty: !data.occupied_now,
+    minutes_until_next: data.minutes_until_next !== undefined ? data.minutes_until_next :
+      data.occupied_now ? null : data.next_class ? data.next_class.start_min - data.now_min : null };
+}
+
+function nextAvailabilityText(data) {
+  if (Number.isFinite(data.available_from_min)) {
+    const start = minToTime(data.available_from_min);
+    return Number.isFinite(data.available_until_min)
+      ? `Available ${start} – ${minToTime(data.available_until_min)} ET`
+      : `Available from ${start} ET · no later scheduled classes`;
+  }
+  if (data.occupied_now) return 'In use. Next availability is not verified.';
+  if (data.next_free_window?.start && data.next_free_window?.end) {
+    return `Available ${data.next_free_window.start} – ${data.next_free_window.end} (${data.next_free_window.duration_mins} min)`;
+  }
+  return 'No more scheduled classes in this day’s schedule.';
+}
+
 function renderRoomDetail(data) {
-  const DAY_START = 7 * 60, DAY_END = 22 * 60, SPAN = DAY_END - DAY_START;
-
-  // Status badge
-  const statusEl = $('rds-status');
-  if (statusEl) {
-    let label, color;
-    if (data.occupied_now) {
-      label = 'In Use'; color = '#ff7166';
-    } else {
-      const min = data.next_class ? data.next_class.start_min - data.now_min : null;
-      label = min === null ? 'Free All Day' : min <= 30 ? 'Closing Soon' : 'Free Now';
-      color = (min !== null && min <= 30) ? '#f59e0b' : '#3fff8b';
-    }
-    statusEl.textContent = label;
-    statusEl.style.cssText = `background:${color}1a;border:1px solid ${color}44;color:${color};padding:4px 12px;border-radius:2px;font-size:10px;font-weight:700;font-family:'Space Grotesk',sans-serif;text-transform:uppercase;letter-spacing:0.1em`;
+  const facts = detailRoomFacts(data), st = roomStatusMeta(facts);
+  const status = $('rds-status');
+  if (status) {
+    status.textContent = st.kind === 'busy' ? 'In use' : st.kind === 'soon' ? 'Closing soon' : st.text;
+    status.style.cssText = `color:${st.color};padding:4px 12px;font-size:12px;font-weight:700`;
   }
-
-  setText('rds-day', `${data.weekday} · Today`);
-  const n = data.classes.length;
-  setText('rds-summary', n === 0 ? 'No classes today' : `${n} class${n !== 1 ? 'es' : ''} scheduled`);
-  const capEl = $('rds-capacity');
-  if (capEl) {
-    if (data.capacity) { capEl.textContent = `cap ${data.capacity}`; capEl.classList.remove('hidden'); }
-    else { capEl.classList.add('hidden'); }
-  }
-
-  // Timeline bar
-  const tl = $('rds-timeline');
-  if (tl) {
-    tl.innerHTML = '';
+  const query = state.snapshot?.query || state.query;
+  setText('rds-day', reliability.contextLabel(query, state.snapshot?.meta.context, state.snapshot?.meta.offline));
+  setText('rds-summary', `${data.classes.length} scheduled class${data.classes.length === 1 ? '' : 'es'} · ${suitabilityLabel(facts)}`);
+  const cap = $('rds-capacity');
+  if (cap) { cap.textContent = data.capacity ? `Schedule capacity ${data.capacity}` : ''; cap.classList.toggle('hidden', !data.capacity); }
+  const timeline = $('rds-timeline');
+  if (timeline) {
+    timeline.replaceChildren();
+    const dayStart = 7 * 60, span = 15 * 60;
     data.classes.forEach(cls => {
-      const left  = Math.max(0, (cls.start_min - DAY_START) / SPAN * 100);
-      const width = Math.min(100 - left, (cls.end_min - cls.start_min) / SPAN * 100);
-      const div = document.createElement('div');
-      div.style.cssText = `position:absolute;top:0;bottom:0;left:${left}%;width:${width}%;background:${cls.is_current ? '#ff7166bb' : '#ff716640'};border-right:1px solid rgba(255,113,102,0.2)`;
-      tl.appendChild(div);
+      const left = Math.max(0, Math.min(100, (cls.start_min - dayStart) / span * 100));
+      const right = Math.max(left, Math.min(100, (cls.end_min - dayStart) / span * 100));
+      const mark = textElement('div', '', `position:absolute;top:0;bottom:0;left:${left}%;width:${right-left}%;background:${cls.is_current ? '#ff7166bb' : '#ff716640'};border-right:1px solid rgba(255,113,102,0.2)`);
+      mark.title = `${cls.course || 'Class'} · ${minToTime(cls.start_min)} – ${minToTime(cls.end_min)}`;
+      timeline.appendChild(mark);
     });
-    // Current time marker
-    const nowPct = Math.max(0, Math.min(100, (data.now_min - DAY_START) / SPAN * 100));
-    const marker = document.createElement('div');
-    marker.style.cssText = `position:absolute;top:0;bottom:0;left:${nowPct}%;width:2px;background:#3fff8b;box-shadow:0 0 6px #3fff8b;z-index:2`;
-    tl.appendChild(marker);
-    const nowLbl = document.createElement('div');
-    nowLbl.style.cssText = `position:absolute;top:2px;left:${nowPct}%;font-size:7px;color:#3fff8b;font-family:'Space Grotesk',sans-serif;transform:translateX(-50%);z-index:3;font-weight:700`;
-    nowLbl.textContent = 'NOW';
-    tl.appendChild(nowLbl);
+    if (Number.isFinite(data.now_min)) {
+      const percent = Math.max(0, Math.min(100, (data.now_min - dayStart) / span * 100));
+      const marker = textElement('div', '', `position:absolute;top:0;bottom:0;left:${percent}%;width:2px;background:var(--free);z-index:2`);
+      marker.title = `Query time ${minToTime(data.now_min)} ET`;
+      timeline.appendChild(marker);
+    }
   }
-
-  // Build slot list: interleave free windows + classes
   const list = $('rds-list');
-  if (!list) return;
-  list.innerHTML = '';
-
-  if (n === 0) {
-    list.innerHTML = `<div style="text-align:center;padding:48px 16px">
-      <div style="font-size:36px;margin-bottom:10px">✓</div>
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:700;color:#3fff8b">Free all day</div>
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:11px;color:#767575;margin-top:6px">No classes scheduled today</div>
-    </div>`;
-    // Hide free window banner — room is free all day; large checkmark above is sufficient
-    const fwEl0 = $('room-free-window');
-    if (fwEl0) fwEl0.classList.add('hidden');
-    return;
+  if (list) {
+    list.replaceChildren();
+    if (!data.classes.length) list.appendChild(textElement('div', `No recurring classes scheduled for this room on ${data.weekday}. Room access is not guaranteed.`, 'padding:24px;color:var(--muted);font-size:14px'));
+    data.classes.forEach(cls => {
+      const row = textElement('div', '', 'padding:12px 14px;background:var(--raised);border:1px solid var(--hairline-soft);border-radius:2px');
+      row.appendChild(textElement('div', cls.is_current ? 'In session at selected time' : 'Scheduled class', `font-size:11px;color:${cls.is_current ? 'var(--busy)' : 'var(--muted)'}`));
+      row.appendChild(textElement('div', `${minToTime(cls.start_min)} – ${minToTime(cls.end_min)} ET`, 'font-size:14px;color:var(--text);margin-top:4px'));
+      if (cls.course || cls.title) row.appendChild(textElement('div', [cls.course, cls.title].filter(Boolean).join(' · '), 'font-size:13px;color:var(--text);margin-top:4px;overflow-wrap:anywhere'));
+      if (cls.instructor) row.appendChild(textElement('div', cls.instructor, 'font-size:12px;color:var(--muted);margin-top:4px'));
+      list.appendChild(row);
+    });
   }
-
-  const slots = [];
-  let prev = DAY_START;
-  data.classes.forEach(cls => {
-    if (cls.start_min > prev) slots.push({ type:'free', start:prev, end:cls.start_min });
-    slots.push({ type:'class', start:cls.start_min, end:cls.end_min, isCurrent:cls.is_current,
-                 course:cls.course, title:cls.title, instructor:cls.instructor });
-    prev = cls.end_min;
-  });
-  if (prev < DAY_END) slots.push({ type:'free', start:prev, end:DAY_END });
-
-  const frag = document.createDocumentFragment();
-  slots.forEach(slot => {
-    const dur = slot.end - slot.start;
-    const h = Math.floor(dur / 60), m = dur % 60;
-    const durStr = h > 0 ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
-    const isNow  = slot.start <= data.now_min && data.now_min < slot.end;
-    const isPast = slot.end <= data.now_min;
-    const row = document.createElement('div');
-
-    if (slot.type === 'class') {
-      row.style.cssText = `display:flex;align-items:center;gap:12px;padding:11px 14px;background:${slot.isCurrent?'rgba(255,113,102,0.08)':'rgba(255,255,255,0.03)'};border:1px solid ${slot.isCurrent?'rgba(255,113,102,0.3)':'rgba(255,255,255,0.07)'};border-radius:2px`;
-      const courseLabel = slot.course
-        ? `${esc(slot.course)}${slot.title ? ' · ' + esc(slot.title) : ''}`
-        : '';
-      row.innerHTML = `
-        <div style="width:3px;align-self:stretch;background:#ff7166;border-radius:2px;flex-shrink:0"></div>
-        <div style="flex:1;min-width:0">
-          <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:700;color:${slot.isCurrent?'#ff7166':'#767575'};text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px">${slot.isCurrent?'● In session':'Class'}</div>
-          <div style="font-family:'Space Grotesk',sans-serif;font-size:13px;color:#fff">${minToTime(slot.start)} – ${minToTime(slot.end)}</div>
-          ${courseLabel ? `<div style="font-family:'Space Grotesk',sans-serif;font-size:11px;color:#adaaaa;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${courseLabel}</div>` : ''}
-          ${slot.instructor ? `<div style="font-family:'Manrope',sans-serif;font-size:10px;color:#767575;margin-top:1px">${esc(slot.instructor)}</div>` : ''}
-        </div>
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;color:#767575;flex-shrink:0">${durStr}</div>`;
-    } else {
-      const col = isNow ? '#3fff8b' : isPast ? '#444' : '#adaaaa';
-      row.style.cssText = `display:flex;align-items:center;gap:12px;padding:11px 14px;background:${isNow?'rgba(63,255,139,0.05)':'transparent'};border:1px solid ${isNow?'rgba(63,255,139,0.15)':'rgba(255,255,255,0.04)'};border-radius:2px`;
-      row.innerHTML = `
-        <div style="width:3px;align-self:stretch;background:${col}66;border-radius:2px;flex-shrink:0"></div>
-        <div style="flex:1;min-width:0">
-          <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:700;color:${col};text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px">${isNow?'● Free now':isPast?'Was free':'Free window'}</div>
-          <div style="font-family:'Space Grotesk',sans-serif;font-size:13px;color:${isPast?'#555':'#fff'}">${minToTime(slot.start)} – ${minToTime(slot.end)}</div>
-        </div>
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:700;color:${isNow?col:'#767575'};flex-shrink:0">${durStr}</div>`;
-    }
-    frag.appendChild(row);
-  });
-  list.appendChild(frag);
-
-  // Render next free window banner
-  const fwEl  = $('room-free-window');
-  const fwTxt = $('room-free-window-text');
-  if (fwEl && fwTxt) {
-    const fw = data.next_free_window;
-    if (fw) {
-      fwTxt.textContent = `${fw.start} \u2013 ${fw.end}  (${fw.duration_mins} min)`;
-      fwEl.style.background = '';
-      fwEl.classList.remove('hidden');
-    } else {
-      // Free rest of day
-      fwTxt.textContent = 'Free for the rest of the day';
-      fwEl.style.background = 'rgba(63,255,139,0.05)';
-      fwEl.classList.remove('hidden');
-    }
-  }
+  setText('room-free-window-text', nextAvailabilityText(data));
+  $('room-free-window')?.classList.remove('hidden');
 }
 
 // ── Geolocation: rank rooms by how far you have to walk ─────────────────────
@@ -2254,72 +2153,43 @@ async function setFindRoomSort(mode) {
 }
 
 // ── Find Me a Room ───────────────────────────────────────────────────────────
-let frBuilding = '';
+
 
 function openFindRoom() {
   const modal = $('find-room-modal');
   if (!modal) return;
   modal.classList.remove('hidden');
-  // If we have cached rooms use them; otherwise fetch fresh
-  if (state.allRoomsData.length) {
-    renderFindRoom(state.allRoomsData);
-  } else {
-    const res = $('fr-results');
-    if (res) res.innerHTML = `<div style="text-align:center;padding:40px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase">Loading…</div>`;
-    fetch('/api/rooms')
-      .then(r => r.json())
-      .then(data => { state.allRoomsData = data; renderFindRoom(data); })
-      .catch(() => { if (res) res.innerHTML = `<div style="color:#ff7166;text-align:center;padding:40px;font-size:11px">Error loading rooms.</div>`; });
-  }
+  syncQueryInputs();
+  if (state.snapshot) renderFindRoom(state.allRoomsData);
+  else setText('fr-results', 'Loading schedule…');
+  overlays.open('find-room-modal', closeFindRoom, '[aria-label="Close find a room"]');
+  renderDataStatus();
+  fetchAllRoomsCache();
 }
 
 function closeFindRoom() {
-  const modal = $('find-room-modal');
-  if (modal) modal.classList.add('hidden');
+  $('find-room-modal')?.classList.add('hidden');
+  overlays.close('find-room-modal');
 }
 
-// ── Gap window: rooms free for an entire time range ─────────────────────────
 function applyGapWindow() {
-  const from  = ($('fr-gap-from')  || {}).value || '';
-  const until = ($('fr-gap-until') || {}).value || '';
-  if (!until) { if ($('fr-gap-until')) $('fr-gap-until').focus(); return; }
-
-  const params = new URLSearchParams();
-  if (from) params.set('at', from);
-  params.set('until', until);
-  if (state.dayAt) params.set('day', state.dayAt);
-
-  const res = $('fr-results');
-  if (res) res.innerHTML = `<div style="text-align:center;padding:40px;color:#adaaaa;font-family:'Space Grotesk',sans-serif;font-size:11px;text-transform:uppercase">Searching…</div>`;
-
-  fetch('/api/rooms?' + params.toString())
-    .then(r => r.json())
-    .then(data => {
-      renderFindRoom(data);
-      const lbl = $('fr-gap-label');
-      if (lbl) {
-        lbl.textContent = `${data.length} room${data.length !== 1 ? 's' : ''} free for the whole ${from || 'now'}–${until} window`;
-        lbl.classList.remove('hidden');
-      }
-      const clear = $('fr-gap-clear');
-      if (clear) clear.classList.remove('hidden');
-    })
-    .catch(() => { if (res) res.innerHTML = `<div style="color:#ff7166;text-align:center;padding:40px;font-size:11px">Error loading rooms.</div>`; });
+  const until = $('fr-gap-until')?.value || '';
+  if (!until) { setText('fr-gap-error', 'Choose an end time.'); return; }
+  commitQuery({ ...state.query, at: $('fr-gap-from')?.value || '', until }, 'fr-gap-error');
 }
 
 function clearGapWindow() {
-  ['fr-gap-from', 'fr-gap-until'].forEach(id => { const e = $(id); if (e) e.value = ''; });
-  const lbl = $('fr-gap-label');
-  if (lbl) lbl.classList.add('hidden');
-  const clear = $('fr-gap-clear');
-  if (clear) clear.classList.add('hidden');
-  renderFindRoom(state.allRoomsData);
+  setText('fr-gap-error', '');
+  commitQuery({ ...state.query, until: '' }, 'fr-gap-error');
 }
 
 function renderFindRoom(rooms) {
   const source = rooms || state.allRoomsData;
   state.frLastRooms = source;
-  const filtered = frBuilding ? source.filter(r => r.building === frBuilding) : source;
+  const filtered = state.building ? source.filter(r => r.building === state.building) : source;
+  const query = state.snapshot?.query || state.query;
+  const label = $('fr-gap-label');
+  if (label) { label.textContent = query.until ? `${filtered.length} rooms match ${reliability.contextLabel(query, state.snapshot?.meta.context, state.snapshot?.meta.offline)}` : ''; label.classList.toggle('hidden', !query.until); }
 
   let sorted;
   if (state.frSort === 'distance' && state.userPos) {
@@ -2349,10 +2219,11 @@ function renderFindRoom(rooms) {
     chipsEl.innerHTML = '';
     const makeChip = (label, val) => {
       const btn = document.createElement('button');
-      const active = frBuilding === val;
+      const active = state.building === val;
       btn.style.cssText = `flex-shrink:0;padding:5px 12px;font-family:'Space Grotesk',sans-serif;font-size:10px;font-weight:700;border-radius:2px;text-transform:uppercase;letter-spacing:0.1em;cursor:pointer;border:1px solid ${active?'#3fff8b':'rgba(255,255,255,0.08)'};background:${active?'#3fff8b':'transparent'};color:${active?'#005d2c':'#adaaaa'};transition:all 0.15s`;
       btn.textContent = label;
-      btn.onclick = () => { frBuilding = val; renderFindRoom(source); };
+      btn.dataset.focusKey = `finder-building:${val}`;
+      btn.addEventListener('click', () => commitQuery({ ...state.query, building: val }));
       return btn;
     };
     chipsEl.appendChild(makeChip('All', ''));
@@ -2379,95 +2250,52 @@ function renderFindRoom(rooms) {
     row.onmouseover = () => { row.style.background = 'rgba(63,255,139,0.08)'; };
     row.onmouseout  = () => { row.style.background = 'rgba(63,255,139,0.03)'; };
     makeActivatable(row, `${buildingName(room.building)} room ${room.room}, ${formatTime(room.minutes_until_next)} free. Open schedule.`,
-                    () => { closeFindRoom(); openRoomDetail(room.building, room.room); });
+                    () => openRoomDetail(room.building, room.room));
     // Same gate as the buildings grid: a fix too coarse to rank with is too
     // coarse to print "304 m - 4 min walk" from.
-    const usable = state.userPos && locationQuality(state.userPos.accuracy).tier !== 'unusable';
+    const usable = state.userPos && !isPositionStale(state.userPos, Date.now()) && locationQuality(state.userPos.accuracy).tier !== 'unusable';
     const dist = usable ? roomDistanceMeters(room) : null;
-    const distLabel = dist !== null
-      ? `<div style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:#6e9bff;margin-top:3px">${formatDistance(dist)}</div>`
-      : '';
-    row.innerHTML = `
-      <div style="font-family:'Space Grotesk',sans-serif;font-size:12px;font-weight:800;color:#444;min-width:20px;text-align:center">#${i+1}</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;font-weight:700;color:#adaaaa;text-transform:uppercase;letter-spacing:0.12em;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(buildingName(room.building))}">${esc(room.building)} · ${esc(buildingName(room.building))}</div>
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:19px;font-weight:800;color:#fff;line-height:1">${esc(room.room)}</div>
-        ${distLabel}
-      </div>
-      <div style="text-align:right;flex-shrink:0">
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:700;color:${color}">${formatTime(room.minutes_until_next)}</div>
-        <div style="font-family:'Space Grotesk',sans-serif;font-size:9px;color:#767575;margin-top:3px;text-transform:uppercase">${room.minutes_until_next===null?'all day':isSoon?'closing soon':'remaining'}</div>
-      </div>`;
+    row.dataset.roomKey = JSON.stringify([room.building,room.room]);
+    row.dataset.focusKey = `finder:${row.dataset.roomKey}`;
+    row.appendChild(textElement('div', `#${i+1}`, 'font-size:12px;color:var(--muted)'));
+    const name = textElement('div', buildingLabel(room.building), 'flex:1;min-width:0;font-size:11px;color:var(--muted);overflow-wrap:anywhere');
+    name.title = buildingName(room.building);
+    name.appendChild(textElement('div', room.room, 'font-size:19px;font-weight:800;color:var(--text)'));
+    if (dist !== null) name.appendChild(textElement('div', formatDistance(dist), 'font-size:11px;color:var(--muted);margin-top:3px'));
+    row.appendChild(name);
+    row.appendChild(statusPill(room));
     frag.appendChild(row);
   });
   res.appendChild(frag);
 }
 
-// ── Free All Day filter ────────────────────────────────────────────────────
-function _updateFreeAllDayBtn(active) {
-  const btn = $('free-all-day-btn');
-  if (!btn) return;
-  btn.style.borderColor  = active ? '#3fff8b' : '';
-  btn.style.color        = active ? '#3fff8b' : '';
-  btn.style.background   = active ? 'rgba(63,255,139,0.08)' : '';
-}
-
-function toggleFreeAllDay() {
-  state.freeAllDay = !state.freeAllDay;
-  _updateFreeAllDayBtn(state.freeAllDay);
-  fetchRooms();
-  syncURL();
-}
-
 // ── Semester label ─────────────────────────────────────────────────────────
-function _inferSemester() {
-  const now = new Date();
-  const month = now.getMonth() + 1; // 1-12
-  const year  = now.getFullYear();
-  if (month >= 1 && month <= 5)  return `Spring ${year}`;
-  if (month >= 6 && month <= 7)  return `Summer ${year}`;
-  return `Fall ${year}`;
-}
-
-async function fetchSemesterLabel() {
-  try {
-    const r = await fetch('/api/schedule-info');
-    if (!r.ok) return;
-    const d = await r.json();
-    const sem = d.semester || _inferSemester();
-    setText('sidebar-semester', `${sem} · Live`);
-    setText('dash-semester',    `${sem} · Auto-refresh 60s`);
-    setText('footer-semester',  sem);
-    setText('rooms-view-semester', `LIVE · ${sem}`);
-
-    // Data-freshness banners: red warning for stale (past) data,
-    // amber/blue notice for future-semester data
-    const status = d.status || (d.stale === true ? 'stale' : 'current');
-    const staleBanner  = $('stale-data-banner');
-    const futureBanner = $('future-data-banner');
-    if (staleBanner) {
-      if (status === 'stale') {
-        setText('stale-banner-loaded',   d.semester || 'an older semester');
-        setText('stale-banner-expected', d.expected_semester || 'now');
-        staleBanner.classList.remove('hidden');
-      } else {
-        staleBanner.classList.add('hidden');
-      }
-    }
-    if (futureBanner) {
-      if (status === 'future') {
-        setText('future-banner-title', `Showing ${d.semester || 'an upcoming semester'}`);
-        setText('future-banner-body', "That semester hasn't started yet — today's availability reflects its class pattern, not what's actually happening on campus right now.");
-        futureBanner.classList.remove('hidden');
-      } else if (status === 'current' && d.in_session === false) {
-        setText('future-banner-title', 'Campus is between sessions');
-        setText('future-banner-body', `${d.semester || 'The semester'} classes aren't currently meeting (break or finals period) — most rooms are actually free regardless of the schedule shown.`);
-        futureBanner.classList.remove('hidden');
-      } else {
-        futureBanner.classList.add('hidden');
-      }
-    }
-  } catch(e) { /* non-critical */ }
+function renderScheduleInfo(d) {
+  if (!d) return;
+  setText('si-entries', d.entries?.toLocaleString() ?? 'Unknown');
+  setText('si-buildings', d.buildings ?? 'Unknown');
+  setText('si-rooms', d.rooms ?? 'Unknown');
+  setText('si-filename', d.filename || 'Unknown');
+  setText('si-loaded', d.imported_at ? displayTimestamp(d.imported_at) : 'Import time unknown');
+  setText('footer-semester', d.semester || 'Semester unknown');
+  setText('dash-semester', d.semester || 'Semester unknown');
+  const status = d.status || (d.stale === true ? 'stale' : 'unknown');
+  $('stale-data-banner')?.classList.toggle('hidden', status !== 'stale');
+  setText('stale-banner-loaded', d.semester || 'an older semester');
+  setText('stale-banner-expected', d.expected_semester || 'the current term');
+  const future = status === 'future' || (status === 'current' && d.in_session === false);
+  $('future-data-banner')?.classList.toggle('hidden', !future);
+  setText('future-banner-title', status === 'future' ? `Showing ${d.semester || 'an upcoming semester'}` : 'Campus is between sessions');
+  setText('future-banner-body', 'Availability follows the imported recurring class pattern. Actual room access and calendar exceptions are not verified.');
+  const queryDay = state.snapshot?.meta.context?.day;
+  const infoDay = d.weekday || (state.snapshot?.infoFetchedAt ? reliability.campusTime(new Date(state.snapshot.infoFetchedAt)).day : null);
+  const noClasses = Boolean(queryDay && queryDay === infoDay && d.has_classes_today === false);
+  ['no-classes-banner', 'dash-no-classes-banner'].forEach(id => $(id)?.classList.toggle('hidden', !noClasses));
+  setText('no-classes-banner-day', queryDay || 'Day unknown');
+  setText('dash-no-classes-banner-day', queryDay || 'Day unknown');
+  setText('schedule-day-fact', queryDay && queryDay === infoDay && typeof d.has_classes_today === 'boolean'
+    ? (d.has_classes_today ? `Classes are scheduled on ${queryDay}.` : `No recurring classes scheduled on ${queryDay}.`)
+    : 'Day-level schedule information is unknown.');
 }
 
 // Close overlays on Escape; press / to focus search
@@ -2477,11 +2305,8 @@ document.addEventListener('keydown', e => {
       closeSearchUI({ clear: false });
       return;
     }
-    closeRoomDetail();
-    closeFindRoom();
-    closeFloorPanel();
   }
-  if (e.key === '/' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
+  if (e.key === '/' && !overlays.active() && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
     e.preventDefault();
     const search = $('global-search');
     if (search) search.focus();
@@ -2494,6 +2319,7 @@ let nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
 
 function updateCountdown() {
   const secsLeft = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
+  if (['window-ended', 'invalid'].includes(state.requestState)) { setText('refresh-countdown', 'Adjust query to refresh'); return; }
   const el = $('refresh-countdown');
   if (el) el.textContent = `Refresh in ${secsLeft}s`;
   const hdrSecs = $('hdr-countdown-secs');
@@ -2507,12 +2333,184 @@ function updateCountdown() {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
-async function refresh() {
-  await Promise.all([fetchBuildings(), fetchRooms()]);
-  fetchAllRoomsCache();
+function preserveFocus(render) {
+  const active = document.activeElement;
+  const key = active?.dataset?.focusKey;
+  render();
+  if (key && !active.isConnected) {
+    const replacement = Array.from(document.querySelectorAll('[data-focus-key]')).find(el => el.dataset.focusKey === key);
+    replacement?.focus({ preventScroll: true });
+  }
+}
+
+function displayTimestamp(stamp) {
+  return stamp ? new Date(stamp).toLocaleString('en-US', {
+    timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  }) + ' ET' : 'Retrieval time unknown';
+}
+
+let lastScheduleAnnouncement = '';
+function renderDataStatus() {
+  const snapshot = state.snapshot;
+  const phase = state.requestState;
+  const terminal = ['invalid', 'window-ended'].includes(phase);
+  if (terminal && state.detailRoom && !state.detailData) {
+    setText('rds-status', 'Query needs editing');
+    setText('rds-list', `${state.requestError} Use Edit filters to choose a valid query.`);
+    $('room-free-window')?.classList.add('hidden');
+  }
+  document.querySelectorAll('[data-surface-edit]').forEach(el => el.classList.toggle('hidden', !terminal));
+  const retained = snapshot && !['success', 'empty'].includes(phase);
+  let message = phase === 'loading' ? 'Loading schedule…' : phase === 'refreshing' ? 'Refreshing — previous results retained.' :
+    phase === 'offline' ? (snapshot ? 'Last-known schedule — offline.' : 'Offline — no verified cached schedule.') + (state.requestError ? ` ${state.requestError}` : '') :
+    state.requestError || (phase === 'unverified' ? 'Schedule received, but availability context is unverified. Retry after the service is updated.' :
+      phase === 'empty' ? 'No rooms in this schedule.' : '');
+  if (snapshot) message += `${message ? ' ' : ''}${retained ? 'Last known: ' : 'Updated: '}${displayTimestamp(snapshot.meta.fetchedAt)}.`;
+  if (snapshot && !snapshot.meta.verified) message += ' Schedule version/query context is unverified.';
+  const context = snapshot ? reliability.contextLabel(snapshot.query, snapshot.meta.context, snapshot.meta.offline) :
+    phase === 'invalid' ? 'Invalid query · correct the filters' : reliability.contextLabel(state.query);
+  setText('query-context', context);
+  setText('applied-query', `${reliability.contextLabel(state.query)}${state.freeAllDay ? ' · No more scheduled classes' : ''} · Closing soon ≤ ${state.soonThresholdMins} min`);
+  if (snapshot && reliability.queryParams(snapshot.query, true).toString() !== filterParams({building:true}).toString()) {
+    message += ` Requested ${reliability.contextLabel(state.query)}; shown results still use the previous query.`;
+  }
+  const status = $('data-status');
+  if (status) status.dataset.state = phase;
+  setText('data-status-text', message);
+  const retry = !['loading', 'refreshing', 'success', 'empty', 'window-ended', 'invalid'].includes(phase);
+  $('data-retry')?.classList.toggle('hidden', !retry);
+  $('data-edit-query')?.classList.toggle('hidden', !['invalid', 'window-ended'].includes(phase));
+  document.querySelectorAll('[data-surface-status]').forEach(el => { el.textContent = `${context} · ${message}`; });
+  document.querySelectorAll('[data-surface-retry]').forEach(el => { el.classList.toggle('hidden', !retry); });
+  const mode = phase === 'unverified' ? 'Unverified schedule' : phase === 'offline' ? (snapshot ? 'Offline · Last known' : 'Offline · Schedule not loaded') :
+    ['error','timeout','inconsistent','permission-denied','window-ended','invalid','validation'].includes(phase) ? (snapshot ? 'Last known' : 'Schedule not loaded') : context;
+  document.querySelectorAll('[data-live-label]').forEach(el => { el.textContent = mode; });
+  setText('rooms-view-semester', `${mode} · ${snapshot?.info?.semester || 'Semester unknown'}`);
+  setText('sidebar-semester', `${snapshot?.info?.semester || 'Semester unknown'} · ${mode}`);
+  setText('sidebar-status', message);
+  setText('grid-timestamp', snapshot ? displayTimestamp(snapshot.meta.fetchedAt) : 'Not loaded');
+  setText('footer-sync', snapshot ? displayTimestamp(snapshot.meta.fetchedAt) : 'Not loaded');
+  // Receipt/countdown changes remain visible but are not meaningful announcements.
+  // Only the central live region (in the active dialog, if any) speaks updates.
+  if (!['loading','refreshing'].includes(phase)) {
+    const signature = JSON.stringify([phase, state.requestError, state.query, snapshot?.meta.version,
+      state.allRoomsCache.map(room => [room.building,room.room,room.empty,room.matches_requested_window])]);
+    if (signature !== lastScheduleAnnouncement) {
+      lastScheduleAnnouncement = signature;
+      announce(`${context}. ${['success','empty'].includes(phase) ? phase === 'empty' ? 'No rooms in this schedule.' : 'Schedule updated.' : message}`);
+    }
+  }
+}
+
+function renderSnapshot() {
+  const snapshot = state.snapshot;
+  if (!snapshot) return;
+  preserveFocus(() => {
+    updateStats(state.buildingsData);
+    updateHomeHeroStat(state.buildingsData);
+    renderBuildingChips(state.buildingsData);
+    renderBuildingsControls(state.buildingsData);
+    renderBuildingsGrid(state.buildingsData);
+    renderRoomsGrid(state.lastRoomsData);
+    renderSidebarTopRooms(state.lastRoomsData);
+    if (state.map) updateBuildingMarkers(state.map, state.markers, state.buildingsData);
+    if (state.dashMap) updateBuildingMarkers(state.dashMap, state.dashMarkers, state.buildingsData, {interactive:false});
+    if (state.openBuilding) renderOpenBuilding();
+    if (!$('find-room-modal')?.classList.contains('hidden')) renderFindRoom(state.allRoomsData);
+    if (state.detailRoom && snapshot.detailKey === state.detailRoom) {
+      if (snapshot.detail) { state.detailData = snapshot.detail; renderRoomDetail(snapshot.detail); }
+      else { setText('rds-status', 'Not in current schedule'); setText('rds-list', 'This room is not in the current schedule. Your saved pin is retained.'); $('room-free-window')?.classList.add('hidden'); }
+    }
+    if (isSearchPanelOpen()) {
+      const mobile = isMobileSearchOpen();
+      const input = $(mobile ? 'mobile-search-input' : 'global-search');
+      renderSearchModel($(mobile ? 'mobile-search-results' : 'search-results'), buildSearchModel(input?.value || ''));
+    }
+    renderScheduleInfo(snapshot.info);
+  });
+  renderDataStatus();
+}
+
+async function refresh({coherenceRetry = false} = {}) {
+  const query = Object.freeze({ ...state.query });
+  const key = reliability.queryParams(query).toString();
+  const ticket = refreshGeneration.begin(key);
+  const invalid = reliability.validateQuery(query);
+  if (invalid) {
+    state.requestState = query.until && !query.at && invalid.includes('after') ? 'window-ended' : 'invalid';
+    state.requestError = state.requestState === 'window-ended' ? 'This requested window has ended. Choose a later end time or clear the window.' : invalid;
+    setText('query-error', state.requestError);
+    renderDataStatus();
+    return;
+  }
+  const detailKey = state.detailRoom, buildingKey = state.openBuilding;
+  state.requestState = state.snapshot ? 'refreshing' : 'loading';
+  state.requestError = '';
+  setText('query-error', '');
+  if (!state.snapshot) renderRoomsGridSkeleton();
+  if (buildingKey && (state.snapshot?.buildingKey !== buildingKey || !state.snapshot.heatmap)) setText('panel-heatmap', 'Loading weekly schedule…');
+  renderDataStatus();
+  const load = async () => {
+    try {
+      const params = reliability.queryParams(query), filtered = reliability.queryParams(query, true);
+      const get = (path, qs = params) => reliability.request(path + (qs.toString() ? '?' + qs : ''), { signal: ticket.signal });
+      const detailParams = new URLSearchParams(params);
+      if (detailKey) { const [building, room] = splitDetailRoom(detailKey); detailParams.set('building', building); detailParams.set('room', room); }
+      const heatmapParams = new URLSearchParams({building:buildingKey});
+      const [buildings, available, roster, info, detail, heatmap] = await Promise.all([
+        get('/api/buildings'), get('/api/rooms', filtered), get('/api/rooms/all'),
+        get('/api/schedule-info', new URLSearchParams()),
+        detailKey ? get('/api/room/schedule', detailParams).catch(error => { if (error.status === 404) return null; throw error; }) : null,
+        buildingKey ? get('/api/heatmap', heatmapParams).catch(() => null) : null,
+      ]);
+      if (![buildings.data, available.data, roster.data].every(Array.isArray) || !info.data || typeof info.data !== 'object' ||
+          (detail && !Array.isArray(detail.data.classes))) throw new Error('Invalid schedule response');
+      const packets = [buildings, available, roster, ...(detail ? [detail] : [])];
+      const meta = reliability.snapshotMetadata(packets);
+      const version = info.version || info.data.schedule_version;
+      if (version && meta.version && version !== meta.version) {
+        throw Object.assign(new Error('Schedule changed during refresh. Retry for a consistent snapshot.'), {kind:'inconsistent'});
+      }
+      if (meta.offline && (!meta.verified || roster.data.some(room => typeof room.matches_requested_window !== 'boolean'))) {
+        throw Object.assign(new Error('Cached schedule uses an older format. Reconnect and retry to verify availability.'), {kind:'offline'});
+      }
+      refreshGeneration.commit(ticket, () => {
+        const snapshot = {query, meta, acceptedAt:Date.now(), info:info.data, infoFetchedAt:info.fetchedAt, detailKey, detail:detail?.data || null, buildingKey, heatmap:heatmap && (!meta.version || heatmap.version === meta.version) ? heatmap.data : null};
+        // Publish caches only after the entire generation and context have passed.
+        state.snapshot = snapshot;
+        state.buildingsData = buildings.data;
+        state.allRoomsCache = roster.data;
+        state.allRoomsCacheReady = true;
+        state.allRoomsCacheKey = key;
+        state.allRoomsData = roster.data.filter(room => room.empty !== false && room.matches_requested_window !== false);
+        state.lastRoomsData = state.freeAllDay ? available.data.filter(room => room.minutes_until_next === null) : available.data;
+        state.requestState = meta.offline ? 'offline' : !meta.verified ? 'unverified' : roster.data.length ? 'success' : 'empty';
+        renderSnapshot();
+      });
+    } catch (error) {
+      if (!refreshGeneration.current(ticket)) return;
+      if (error.kind === 'inconsistent' && !coherenceRetry) return refresh({coherenceRetry:true});
+      state.requestState = error.kind || (navigator.onLine === false ? 'offline' : 'error');
+      state.requestError = error.message || 'Could not load the schedule. Please retry.';
+      if (['invalid', 'window-ended'].includes(state.requestState)) setText('query-error', state.requestError);
+      if (!state.snapshot) { setText('rooms-container', 'Schedule not loaded.'); setText('fr-results', 'Schedule not loaded.'); }
+      if (state.detailRoom === detailKey && !state.detailData) {
+        setText('rds-status', 'Schedule unavailable');
+        setText('rds-list', 'Could not load this room’s schedule. Use Retry above.');
+      }
+      if (buildingKey && state.openBuilding === buildingKey && (state.snapshot?.buildingKey !== buildingKey || !state.snapshot.heatmap)) renderHeatmap(null);
+      renderDataStatus();
+    } finally {
+      if (state.pendingRefresh?.ticket === ticket) state.pendingRefresh = null;
+    }
+  };
+  const promise = load();
+  state.pendingRefresh = { key, promise, ticket };
+  return promise;
 }
 
 async function scheduledRefresh() {
+  if (['window-ended', 'invalid'].includes(state.requestState)) return;
   await refresh();
   nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
 }
@@ -2526,7 +2524,6 @@ async function init() {
   nextRefreshAt = Date.now() + REFRESH_INTERVAL_MS;
   updateCountdown();
   showHomeHeroMap(); // hero map needs data loaded for its markers; re-measures even if view was hidden
-  fetchSemesterLabel();
   setInterval(scheduledRefresh, REFRESH_INTERVAL_MS);
 
   // PWA: offline shell + add-to-home-screen
@@ -2534,5 +2531,12 @@ async function init() {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
 }
+
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduledRefresh(); });
+window.addEventListener('online', scheduledRefresh);
+window.addEventListener('offline', () => {
+  if (!['invalid', 'window-ended'].includes(state.requestState)) state.requestState = 'offline';
+  renderDataStatus();
+});
 
 init();
