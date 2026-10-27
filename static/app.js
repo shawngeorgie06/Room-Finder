@@ -362,15 +362,18 @@ function roomStatus(room) {
   if (isClosingSoon(room)) {
     return { kind: 'soon', text: formatTime(mins), cssVar: 'var(--soon)' };
   }
-  return { kind: 'free', text: formatTime(mins), cssVar: 'var(--free)' };
+  const shortText = mins === null ? 'Rest of day' : undefined;
+  return { kind: 'free', text: formatTime(mins), shortText, cssVar: 'var(--free)' };
 }
 
-function statusPill(room) {
+// compact: tiles are ~100px wide, so long wording gets a short form (the full
+// text stays in the tile's aria-label and tooltip).
+function statusPill(room, compact = false) {
   const st = roomStatus(room);
   const el = document.createElement('span');
   el.className = 'label';
   el.style.cssText = `color:${st.cssVar};white-space:nowrap;flex-shrink:0`;
-  el.textContent = st.text;
+  el.textContent = compact && st.shortText ? st.shortText : st.text;
   return el;
 }
 
@@ -1577,6 +1580,17 @@ function renderHeatmap(data) {
   wrap.appendChild(textElement('div', 'Quiet → Busy · hover for scheduled room counts', 'font-size:9px;color:var(--muted);margin-top:6px'));
 }
 
+// Floor used only to group tiles inside the building panel. A recorded floor
+// wins; otherwise fall back to the room number (first digit; G/B prefixes are
+// ground). Floor *search* still ignores this and matches recorded floors only.
+function panelFloor(room) {
+  if (Number.isInteger(room.floor)) return room.floor;
+  const id = String(room.room).toUpperCase();
+  if (id.startsWith('G') || id.startsWith('B')) return 0;
+  const digit = id.match(/\d/);
+  return digit ? Number(digit[0]) : 1;
+}
+
 // Rooms grouped by floor. In-use rooms stay visible but dimmed — hiding them
 // leaves a suspiciously short list with no sense of the building's size.
 function renderRoomsByFloor(rooms) {
@@ -1584,17 +1598,20 @@ function renderRoomsByFloor(rooms) {
   if (!container) return;
   container.textContent = '';
 
-  const floors = [...new Set(rooms.map(r => r.floor))].sort((a, b) => a - b);
+  const floors = [...new Set(rooms.map(panelFloor))].sort((a, b) => a - b);
   const frag = document.createDocumentFragment();
 
   floors.forEach(floor => {
-    const onFloor = rooms.filter(r => r.floor === floor);
-    const freeCount = onFloor.filter(r => r.empty !== false).length;
+    const onFloor = rooms.filter(r => panelFloor(r) === floor);
+    const freeCount = onFloor.filter(r => {
+      const kind = roomStatus(r).kind;
+      return kind === 'free' || kind === 'soon';
+    }).length;
 
     const head = document.createElement('div');
     head.dataset.floorHead = floor;
     head.style.cssText = 'grid-column:1/-1;display:flex;align-items:center;gap:10px;margin-top:8px';
-    head.appendChild(groupLabel(floor === null || floor === undefined ? 'Floor not recorded' : floor === 0 ? 'Ground floor' : `Floor ${floor}`));
+    head.appendChild(groupLabel(floor === 0 ? 'Ground floor' : `Floor ${floor}`));
     const rule = document.createElement('span');
     rule.style.cssText = 'flex:1;height:1px;background:var(--hairline-soft)';
     head.appendChild(rule);
@@ -1612,6 +1629,7 @@ function renderRoomsByFloor(rooms) {
       btn.dataset.room = room.room;
       btn.dataset.focusKey = `floor:${JSON.stringify([room.building,room.room])}`;
       btn.dataset.floor = floor;
+      btn.title = st.text;
       btn.setAttribute('aria-label',
         `Room ${room.room}, ${st.text}. Open schedule.`);
       const tone = st.kind === 'busy'
@@ -1629,7 +1647,7 @@ function renderRoomsByFloor(rooms) {
         'font-variant-numeric:tabular-nums;line-height:1;color:var(--text)';
       num.textContent = room.room;
       btn.appendChild(num);
-      btn.appendChild(statusPill(room));
+      btn.appendChild(statusPill(room, true));
       frag.appendChild(btn);
     });
   });

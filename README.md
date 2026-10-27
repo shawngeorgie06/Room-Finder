@@ -25,8 +25,10 @@ Live at: [https://room-finder.onrender.com](https://room-finder.onrender.com) *(
 
 **Navigation**
 - Campus map with live occupancy color coding per building
-- Per-building room grid, grouped by floor when `data/campus_metadata.json` records
-  one (the shipped seed records no rooms, so every room reads "Floor not recorded")
+- Per-building room grid, grouped by floor. A floor recorded in
+  `data/campus_metadata.json` wins; otherwise the panel groups by room number (first
+  digit, `G`/`B` prefixes are ground). Floor *search* still matches recorded floors only,
+  and the API still reports `floor: null` for unrecorded rooms
 - Room detail sheet — daily timeline, class list, next free window
 - Press `/` anywhere to jump to room search
 

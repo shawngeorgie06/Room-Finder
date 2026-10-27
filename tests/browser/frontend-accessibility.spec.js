@@ -45,6 +45,28 @@ test('building to detail closes only top overlay and restores refreshed room foc
 });
 
 for(const viewport of [{width:1440,height:1000},{width:390,height:844},{width:375,height:812}]) {
+  test(`building panel groups rooms by floor and tile text fits at ${viewport.width}`,async({page,appURL})=>{
+    await page.setViewportSize(viewport); await ready(page,appURL,'?view=dashboard');
+    // Rooms with no recorded floor are grouped by room number, not dumped under one heading.
+    await page.evaluate(()=>{
+      state.allRoomsCache=state.allRoomsCache.map(r=>r.building==='CKB'?{...r,floor:null}:r);
+      state.allRoomsCacheReady=true;
+      openBuildingPanel(state.buildingsData.find(b=>b.building==='CKB'));
+    });
+    await expect(page.locator('#floor-rooms')).not.toContainText('Floor not recorded');
+    await expect(page.locator('#floor-rooms [data-floor-head]').first()).toContainText(/(Floor \d|Ground floor)/);
+    // Even the longest status wording must stay inside its tile.
+    await page.evaluate(()=>{
+      const first=document.querySelector('#floor-rooms button[data-room]');
+      first.replaceChild(statusPill({empty:true,minutes_until_next:null},true),first.lastChild);
+    });
+    const overflowing=await page.evaluate(()=>[...document.querySelectorAll('#floor-rooms button[data-room]')].filter(btn=>{
+      const pill=btn.lastElementChild; if(!pill) return false;
+      return pill.getBoundingClientRect().right>btn.getBoundingClientRect().right-1||pill.scrollWidth>pill.clientWidth+1;
+    }).map(btn=>btn.dataset.room));
+    expect(overflowing).toEqual([]);
+  });
+
   test(`filter draft apply cancel reset and bounded detail at ${viewport.width}`,async({page,appURL},info)=>{
     await page.setViewportSize(viewport); await ready(page,appURL);
     const trigger=page.getByRole('button',{name:'Filters',exact:true});

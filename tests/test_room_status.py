@@ -110,6 +110,13 @@ def test_room_status_text():
     ]
 
 
+def test_room_status_short_text_only_for_the_long_wording():
+    """Tiles are ~100px wide; only the 25-character wording needs a short form."""
+    assert _run('roomStatus(room).shortText') == [
+        None, None, 'Rest of day', None, None, None, None, None, None, None,
+    ]
+
+
 def test_room_status_css_vars():
     assert _run('roomStatus(room).cssVar') == [
         'var(--busy)', 'var(--busy)', 'var(--free)', 'var(--soon)',
