@@ -1,0 +1,4 @@
+# Runtime inputs. Regenerate requirements.txt with uv pip compile --generate-hashes.
+Flask==3.1.3
+openpyxl==3.1.5
+gunicorn==26.2.0

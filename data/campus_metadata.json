@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "buildings": {
+    "GITC": {
+      "name": "Guttenberg Information Technologies Center",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74424, "lng": -74.17940, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "FMH": {
+      "name": "Faculty Memorial Hall",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74188, "lng": -74.17880, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "CKB": {
+      "name": "Central King Building",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74196, "lng": -74.17741, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "KUPF": {
+      "name": "Kupfrian Hall",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74242, "lng": -74.17845, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "TIER": {
+      "name": "Tiernan Hall",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74193, "lng": -74.17950, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "CULM": {
+      "name": "Cullimore Hall",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74294, "lng": -74.17729, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "ME": {
+      "name": "Mechanical & Industrial Engineering Center",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74402, "lng": -74.17870, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "FENS": {
+      "name": "Fenster Hall",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74250, "lng": -74.17709, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "ECEC": {
+      "name": "Electrical & Computer Engineering Building",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74140, "lng": -74.17874, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "CAMP": {
+      "name": "Campbell Hall",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74163, "lng": -74.17779, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "WEST": {
+      "name": "Weston Hall",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74120, "lng": -74.17734, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "WEC": {
+      "name": "Wellness & Events Center",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74229, "lng": -74.18041, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "COLT": {
+      "name": "Colton Hall",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74146, "lng": -74.17788, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "DHRH": {
+      "name": "Dorman Honors Residence Hall",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74135, "lng": -74.18018, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "HUD": {
+      "name": "Hudson Building",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74170, "lng": -74.17690, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "MALL": {
+      "name": "Student Mall",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74012, "lng": -74.17845, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "CTR": {
+      "name": "Campus Center",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74307, "lng": -74.17835, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    },
+    "CAB": {
+      "name": "Central Avenue Building",
+      "source": "Inherited from static/app.js:BUILDING_NAMES at commit 6e6a871; not externally verified",
+      "verified_at": null,
+      "coordinates": {"lat": 40.74379, "lng": -74.17802, "kind": "representative", "approximate": true, "source": "Inherited from static/app.js:BUILDING_COORDS at commit 6e6a871; not a verified entrance", "verified_at": null},
+      "rooms": {}
+    }
+  }
+}

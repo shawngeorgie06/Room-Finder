@@ -6,13 +6,45 @@ before storage; the browser cookie is a random identifier, not an identity.
 
 import hashlib
 import os
+import re
 import sqlite3
+import uuid
+from urllib.parse import urlsplit, urlunsplit
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 
 RETENTION_DAYS = 90
+
+
+def normalize_visitor_id(value):
+    """Accept only the bounded lowercase hex identifiers this app issues."""
+    if isinstance(value, str) and re.fullmatch(r'[0-9a-f]{32}', value):
+        return value
+    return uuid.uuid4().hex
+
+
+def _redact_referrer(value):
+    """Persist only an HTTP(S) origin/path, never userinfo, query or fragment."""
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+            return ''
+        # Reject malformed ports/authorities as well as browser backslash URLs.
+        if parsed.port is not None and not 0 < parsed.port <= 65535:
+            return ''
+        if '\\' in parsed.netloc:
+            return ''
+        return urlunsplit((parsed.scheme, parsed.netloc.rsplit('@', 1)[-1],
+                           parsed.path, '', ''))[:1000]
+    except ValueError:
+        return ''
+
+
+def _prune_expired(db, now):
+    cutoff = (now - timedelta(days=RETENTION_DAYS)).isoformat()
+    db.execute("DELETE FROM visits WHERE visited_at < ?", (cutoff,))
 
 
 def connect(path):
@@ -41,24 +73,26 @@ def record_visit(path, visitor_id, ip_address, user_agent, referrer, salt):
     """Record one page open and prune entries beyond the retention window."""
     now = datetime.now(timezone.utc)
     ip_hash = hashlib.sha256(f"{salt}:{ip_address}".encode()).hexdigest()[:12]
-    cutoff = (now - timedelta(days=RETENTION_DAYS)).isoformat()
     with closing(connect(path)) as db:
         with db:
             db.execute(
                 "INSERT INTO visits(visitor_id, visited_at, ip_hash, user_agent, referrer) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (visitor_id, now.isoformat(), ip_hash, user_agent[:500], referrer[:1000]),
+                (normalize_visitor_id(visitor_id), now.isoformat(), ip_hash,
+                 user_agent[:500], _redact_referrer(referrer)),
             )
-            db.execute("DELETE FROM visits WHERE visited_at < ?", (cutoff,))
+            _prune_expired(db, now)
 
 
 def get_visits(path, limit=500):
-    """Return recent visits plus small summary statistics."""
+    """Prune expired visits, then return retained visits and summary statistics."""
     limit = max(1, min(int(limit), 2000))
     eastern_midnight = datetime.now(ZoneInfo('America/New_York')).replace(
         hour=0, minute=0, second=0, microsecond=0
     ).astimezone(timezone.utc).isoformat()
     with closing(connect(path)) as db:
+        with db:
+            _prune_expired(db, datetime.now(timezone.utc))
         visits = db.execute(
             """SELECT visitor_id, visited_at, ip_hash, user_agent, referrer
                FROM visits ORDER BY visited_at DESC LIMIT ?""",
