@@ -110,6 +110,29 @@ def test_room_status_text():
     ]
 
 
+def test_room_status_short_text_only_for_the_long_wording():
+    """Tiles are ~100px wide; only the 25-character wording needs a short form."""
+    assert _run('roomStatus(room).shortText') == [
+        None, None, 'Rest of day', None, None, None, None, None, None, None,
+    ]
+
+
+def test_unknown_statuses_have_tile_sized_short_text():
+    """'Availability unknown' and 'Not in current schedule' overflowed the tiles."""
+    out = subprocess.run(['node', '-e', '\n'.join([
+        _preamble(),
+        "const state = { soonThresholdMins: 30 };",
+        "console.log(JSON.stringify(["
+        "roomStatus({availabilityUnknown: true}),"
+        "roomStatus({missingFromSchedule: true})]));",
+    ])], capture_output=True, text=True, timeout=20)
+    assert out.returncode == 0, out.stderr
+    unknown, missing = json.loads(out.stdout)
+    assert (unknown['shortText'], missing['shortText']) == ('Unknown', 'No schedule')
+    assert unknown['text'] == 'Availability unknown'
+    assert missing['text'] == 'Not in current schedule'
+
+
 def test_room_status_css_vars():
     assert _run('roomStatus(room).cssVar') == [
         'var(--busy)', 'var(--busy)', 'var(--free)', 'var(--soon)',

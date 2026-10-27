@@ -45,6 +45,33 @@ test('building to detail closes only top overlay and restores refreshed room foc
 });
 
 for(const viewport of [{width:1440,height:1000},{width:390,height:844},{width:375,height:812}]) {
+  test(`building panel groups rooms by floor and tile text fits at ${viewport.width}`,async({page,appURL})=>{
+    await page.setViewportSize(viewport); await ready(page,appURL,'?view=dashboard');
+    // Rooms with no recorded floor are grouped by room number, not dumped under one heading.
+    await page.evaluate(()=>{
+      state.allRoomsCache=state.allRoomsCache.map(r=>r.building==='CKB'?{...r,floor:null}:r);
+      state.allRoomsCacheReady=true;
+      openBuildingPanel(state.buildingsData.find(b=>b.building==='CKB'));
+    });
+    await expect(page.locator('#floor-rooms')).not.toContainText('Floor not recorded');
+    await expect(page.locator('#floor-rooms [data-floor-head]').first()).toContainText(/(Floor \d|Ground floor)/);
+    // Every status wording, including the long ones, must stay inside its tile.
+    const overflowing=await page.evaluate(()=>{
+      const mk=(room,o)=>({building:'CKB',room,floor:null,empty:true,minutes_until_next:45,...o});
+      renderRoomsByFloor([
+        mk('101',{empty:false}),mk('102',{availabilityUnknown:true}),mk('103',{missingFromSchedule:true}),
+        mk('104',{minutes_until_next:null}),mk('105',{minutes_until_next:12}),mk('106',{minutes_until_next:95}),
+        mk('107',{minutes_until_next:undefined}),mk('2020',{minutes_until_next:135}),
+      ]);
+      return [...document.querySelectorAll('#floor-rooms button[data-room]')].filter(btn=>{
+        const range=document.createRange(); range.selectNodeContents(btn.lastElementChild);
+        const text=range.getBoundingClientRect(), tile=btn.getBoundingClientRect();
+        return text.right>tile.right-1||text.left<tile.left;
+      }).map(btn=>btn.dataset.room);
+    });
+    expect(overflowing).toEqual([]);
+  });
+
   test(`filter draft apply cancel reset and bounded detail at ${viewport.width}`,async({page,appURL},info)=>{
     await page.setViewportSize(viewport); await ready(page,appURL);
     const trigger=page.getByRole('button',{name:'Filters',exact:true});

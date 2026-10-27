@@ -8,9 +8,10 @@ frontend consumers look them up by building code. Identifiers are matched exactl
 including internal spaces, with no case folding or floor/type inference.
 
 Missing facts are None (including amenities; [] means explicitly none recorded).
-A null floor intentionally erases any previous guess. Frontend integration must
-render "Floor not recorded" and match floor searches only against known floors;
-room-number heuristics must not be shown as hints or used as a fallback.
+A null floor intentionally erases any previous guess, and the API never infers one.
+Floor searches match only against known floors. The building panel alone groups
+unrecorded rooms by room number for layout (see ``panelFloor`` in static/app.js);
+that grouping is presentation, not data, and is never used for search or filtering.
 
 Room provenance covers the supplied facts only, not unknown fields. Building-level
 source/verified_at pertains only to the NAME; coordinates have their own provenance.
@@ -164,8 +165,8 @@ class CampusMetadata:
 
         Input must include string ``building`` and ``room`` identifiers. Existing
         guessed/imported room metadata is overwritten even when curated facts are
-        unknown. Null floors erase guesses; render "Floor not recorded" and exclude
-        them from floor-specific matches. Any preexisting building_metadata is
+        unknown. Null floors erase guesses and are excluded
+        from floor-specific matches. Any preexisting building_metadata is
         removed: obtain building facts separately via enrich_building. Dynamic
         fields are not recomputed, deep-copied, or mutated.
         """
