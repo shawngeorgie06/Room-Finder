@@ -3,7 +3,7 @@
  * participate. Private routes and third-party map tiles stay network-only.
  * Home/API: network-first; assets: cache-first. Never renew replay timestamps.
  */
-const CACHE_VERSION = 'room-finder-v15-930c4919c7b3f1cb7c9f0f44a5595da745cfc089226cf07171f97f2057595b6e';
+const CACHE_VERSION = 'room-finder-v15-ac763eb0d474b7f20a425730380c485e0a088717ca406ccad732edc054f2a3c2';
 const FETCH_TIMEOUT_MS = 8000;
 const PRECACHE = [
   '/',

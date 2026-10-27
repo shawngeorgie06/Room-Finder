@@ -353,8 +353,8 @@ function isClosingSoon(room) {
 // place rather than being retyped at every call site.
 
 function roomStatus(room) {
-  if (room.availabilityUnknown) return { kind: 'unknown', text: 'Availability unknown', cssVar: 'var(--muted)' };
-  if (room.missingFromSchedule) return { kind: 'unknown', text: 'Not in current schedule', cssVar: 'var(--muted)' };
+  if (room.availabilityUnknown) return { kind: 'unknown', text: 'Availability unknown', shortText: 'Unknown', cssVar: 'var(--muted)' };
+  if (room.missingFromSchedule) return { kind: 'unknown', text: 'Not in current schedule', shortText: 'No schedule', cssVar: 'var(--muted)' };
   if (room.empty === false) {
     return { kind: 'busy', text: 'In use', cssVar: 'var(--busy)' };
   }
@@ -362,7 +362,7 @@ function roomStatus(room) {
   if (isClosingSoon(room)) {
     return { kind: 'soon', text: formatTime(mins), cssVar: 'var(--soon)' };
   }
-  const shortText = mins === null ? 'Rest of day' : undefined;
+  const shortText = mins === null ? 'Rest of day' : mins === undefined ? 'Unknown' : undefined;
   return { kind: 'free', text: formatTime(mins), shortText, cssVar: 'var(--free)' };
 }
 
@@ -372,7 +372,10 @@ function statusPill(room, compact = false) {
   const st = roomStatus(room);
   const el = document.createElement('span');
   el.className = 'label';
-  el.style.cssText = `color:${st.cssVar};white-space:nowrap;flex-shrink:0`;
+  // Compact pills may wrap as a last resort; full-width pills stay on one line.
+  el.style.cssText = compact
+    ? `color:${st.cssVar};min-width:0;overflow-wrap:anywhere`
+    : `color:${st.cssVar};white-space:nowrap;flex-shrink:0`;
   el.textContent = compact && st.shortText ? st.shortText : st.text;
   return el;
 }
@@ -1634,6 +1637,8 @@ function renderRoomsByFloor(rooms) {
         `Room ${room.room}, ${st.text}. Open schedule.`);
       const tone = st.kind === 'busy'
         ? 'opacity:0.5;border-color:var(--hairline-soft);background:var(--surface)'
+        : st.kind === 'unknown'
+          ? 'opacity:0.75;border-color:var(--hairline-soft);background:var(--surface)'
         : st.kind === 'soon'
           ? 'border-color:rgba(245,158,11,0.32);background:rgba(245,158,11,0.06)'
           : 'border-color:rgba(63,255,139,0.3);background:rgba(63,255,139,0.06)';

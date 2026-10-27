@@ -55,15 +55,20 @@ for(const viewport of [{width:1440,height:1000},{width:390,height:844},{width:37
     });
     await expect(page.locator('#floor-rooms')).not.toContainText('Floor not recorded');
     await expect(page.locator('#floor-rooms [data-floor-head]').first()).toContainText(/(Floor \d|Ground floor)/);
-    // Even the longest status wording must stay inside its tile.
-    await page.evaluate(()=>{
-      const first=document.querySelector('#floor-rooms button[data-room]');
-      first.replaceChild(statusPill({empty:true,minutes_until_next:null},true),first.lastChild);
+    // Every status wording, including the long ones, must stay inside its tile.
+    const overflowing=await page.evaluate(()=>{
+      const mk=(room,o)=>({building:'CKB',room,floor:null,empty:true,minutes_until_next:45,...o});
+      renderRoomsByFloor([
+        mk('101',{empty:false}),mk('102',{availabilityUnknown:true}),mk('103',{missingFromSchedule:true}),
+        mk('104',{minutes_until_next:null}),mk('105',{minutes_until_next:12}),mk('106',{minutes_until_next:95}),
+        mk('107',{minutes_until_next:undefined}),mk('2020',{minutes_until_next:135}),
+      ]);
+      return [...document.querySelectorAll('#floor-rooms button[data-room]')].filter(btn=>{
+        const range=document.createRange(); range.selectNodeContents(btn.lastElementChild);
+        const text=range.getBoundingClientRect(), tile=btn.getBoundingClientRect();
+        return text.right>tile.right-1||text.left<tile.left;
+      }).map(btn=>btn.dataset.room);
     });
-    const overflowing=await page.evaluate(()=>[...document.querySelectorAll('#floor-rooms button[data-room]')].filter(btn=>{
-      const pill=btn.lastElementChild; if(!pill) return false;
-      return pill.getBoundingClientRect().right>btn.getBoundingClientRect().right-1||pill.scrollWidth>pill.clientWidth+1;
-    }).map(btn=>btn.dataset.room));
     expect(overflowing).toEqual([]);
   });
 
